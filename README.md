@@ -1,5 +1,9 @@
 # VAULTLINE — Night at the Meridian
 
+[![make.fun · best-heist-game-20261122-0559](https://make.fun/badge/best-heist-game-20261122-0559.svg)](https://make.fun/bounty/best-heist-game-20261122-0559?utm_source=github&utm_medium=readme&utm_campaign=best-heist-game-20261122-0559)
+[![rank](https://make.fun/badge/best-heist-game-20261122-0559/emiliotecnologias/vaultline/rank.svg)](https://make.fun/bounty/best-heist-game-20261122-0559/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=best-heist-game-20261122-0559)
+[![reward](https://make.fun/badge/best-heist-game-20261122-0559/emiliotecnologias/vaultline/reward.svg)](https://make.fun/bounty/best-heist-game-20261122-0559?utm_source=github&utm_medium=readme&utm_campaign=best-heist-game-20261122-0559)
+
 An original top-down bank-heist game that runs in a desktop browser from static files.
 Built for make.fun's **"Make the best heist game"** bounty
 (`best-heist-game-20261122-0559`, $50 USDC, 10 places, 22 Nov 2026 05:59–17:59 UTC).
