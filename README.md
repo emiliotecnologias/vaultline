@@ -2,89 +2,83 @@
 
 An original top-down bank-heist game that runs in a desktop browser from static files.
 Built for make.fun's **"Make the best heist game"** bounty
-(`best-heist-game-20261122-0559`, $50 USDC, 10 places paid, 22 Nov 2026 05:59–17:59 UTC).
+(`best-heist-game-20261122-0559`, $50 USDC, 10 places, 22 Nov 2026 05:59–17:59 UTC).
 
-You are a lone thief casing the **Meridian Bank** at 2:47 AM. Plan the job on a
-blueprint, slip past patrolling guards and sweeping cameras, loop the camera feeds,
-kill the alarm, cut the lasers, crack the vault dial, stuff your duffel with gold,
-cash and gems — and be in the getaway van before the police seal the block.
+One screen, one bank, one night. You are a lone thief casing the Meridian Bank at
+2:47 AM: three guards on patrol, four sweeping cameras, a laser corridor, and a
+vault full of gold, cash, and gems. Plan the job, pick your way in, crack the
+dial, fill the duffel, and vanish before the sirens.
 
-Everything is original: the bank, characters, names, art and sound were created for
-this entry. Every sprite is drawn with Canvas code and every sound is synthesized
-with WebAudio. **Zero network requests at runtime.**
+## How to run
 
-## Run it
-
-Open `game/index.html` in a desktop browser (Chrome recommended) and press **Enter**.
-The whole game is that one file — it also works from `file://`.
-
-If your browser blocks anything from `file://`, serve the folder instead:
+Open `game/index.html` in a desktop browser and press **Enter** — that's it.
+The game is a single self-contained HTML file (vanilla JS + Canvas 2D, all art
+drawn in code, all sound synthesized with WebAudio, zero network requests), so
+it works straight from `file://`. If you prefer a server:
 
 ```sh
-cd game && python3 -m http.server 8080   # then open http://localhost:8080
+python3 -m http.server
+# then open http://localhost:8000/game/
 ```
 
-## The job
+## The job, in five steps
 
-**1. Plan** — blueprint screen: pick an entry point (front doors / back alley /
-roof vent) and 2 tools (lockpick set, camera jammer, smoke bomb, stun baton,
-extra duffel). Guard patrols and camera cones are marked on the plan.
-
-**2. Infiltrate** — one-screen bank: lobby, offices, security room, laser corridor,
-vault. Guards patrol with raycast vision cones; cameras sweep. Sprinting is loud,
-crouching behind tall furniture hides you, coins distract, the baton is silent.
-
-**3. Disable** — steal the keycard from the manager's office, loop the cameras at
-the security console, disable the alarm at the panel, cut laser power in the
-janitor closet. All optional — all make the vault safer.
-
-**4. Crack the vault** — dial timing mini-game (3 tumblers, shrinking green zone;
-misses clang and raise the alarm), then a loud 6-second door swing.
-
-**5. Grab & escape** — gold bars, cash bricks and gem cases, limited by duffel
-weight (heavier = slower). Tripping the vault starts the police ETA; reach either
-getaway van to win. Score = loot + ghost bonus (never seen) + silent bonus
-(no alarm) + speed bonus, ranked S/A/B/C. Best score saves to `localStorage`.
+1. **Plan** — study the blueprint: guard patrols, camera cones, lasers, the vault.
+   Choose one of 3 entry points (front doors, back alley, roof vent) and 2 of 5
+   tools (lockpick set, camera jammer, smoke bomb, stun baton, extra duffel).
+2. **Infiltrate** — sneak the one-screen bank. Crouch behind tall furniture,
+   throw coins to pull guards off their routes, take them down silently from
+   behind (or from any side with the baton).
+3. **Disable** — steal the keycard from the manager's office, loop the cameras
+   at the security console, kill the alarm at its panel, cut the laser power
+   in the janitor closet.
+4. **Crack the vault** — stop the spinning needle in the green zone, three
+   tumblers, each tighter than the last. Miss and the clang feeds the alarm.
+   The door then swings open — loudly — for six long seconds.
+5. **Grab & escape** — gold bars, cash bricks, gem cases, each with a weight.
+   Your duffel holds 40 kg (60 with the extra duffel) and every kilo slows you
+   down. Reach either getaway van to score: loot value + ghost bonus (never
+   seen) + silent bonus (alarm never triggered) + speed bonus, ranked S/A/B/C.
+   If the alarm meter fills, the police are 60 seconds out — be gone first.
 
 ## Controls
 
 | Key | Action |
 |---|---|
-| **W A S D** / arrows | Move |
-| **Shift** | Sprint (fast, noisy) |
-| **C** / Ctrl | Crouch (slow, harder to see) |
-| **E** | Interact (hold for lockpick / console / alarm / power channels) |
-| **Q** | Throw coin toward mouse (distraction) |
-| **F** | Takedown (from behind; anywhere with the baton) |
-| **X** | Smoke bomb (breaks line of sight) |
-| **J** | Camera jammer (60 s blind cameras) |
-| **Space** / Click | Stop the vault dial needle |
-| **P / Esc** | Pause |
-| **R** | Restart job |
-| **M** | Mute |
+| WASD / arrows | Move |
+| Shift | Sprint (fast, noisy — guards investigate) |
+| C / Ctrl | Crouch (slow, harder to see, hidden behind tall furniture) |
+| E (hold) | Interact: pick locks, steal keycard, loop cameras, disable alarm, cut laser power, grab loot, start the vault dial |
+| Q | Throw a coin toward the mouse (distraction, 3 coins) |
+| F | Silent takedown (from behind; anywhere with the stun baton) |
+| X | Smoke bomb — break line of sight (1 use, if in loadout) |
+| J | Camera jammer — blind all cameras 60 s (1 use, if in loadout) |
+| Space / click | Stop the vault needle in the green zone |
+| P / Esc | Pause |
+| R | Restart (back to the plan) |
+| M | Mute |
 
-## Handing it in (make.fun kit)
+## Hand-in (make.fun)
 
-`main.ts` (Node 22, standard library only) copies `game/` and `screenshots/` into
-`$MAKEFUN_OUTPUT_DIR` (default `/output`) and writes `dossier.json` using
-`buildDossier` from `./vendor/makefun-game.ts`:
+`main.ts` is the entry runner (Node 22, standard library only). It copies
+`game/` and `screenshots/` from beside the file into `$MAKEFUN_OUTPUT_DIR`
+(default `/output`) and writes `dossier.json` there using the vendored
+`buildDossier` from `vendor/makefun-game.ts`, so the dossier is byte-for-byte
+what the bounty scorer computes from the same files:
 
 ```sh
-mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+node main.ts                      # writes to /output
+MAKEFUN_OUTPUT_DIR=./out node main.ts
 ```
 
-`vendor/makefun-game.ts` must be copied from the bounty kit unchanged (not included
-here — it comes from the kit). Screenshots (3–4 real renders) go in `screenshots/`:
-suggested shots are the planning blueprint, mid-infiltration (guard + camera cones,
-loot and alarm meter in one frame), the vault-crack mini-game, and the getaway win
-screen.
+## Tech notes
 
-## Tech
-
-- One HTML file: vanilla JavaScript + Canvas 2D. No build step, no dependencies.
-- Vision cones raycast against wall/furniture AABBs (segment–slab tests).
-- Guard AI: patrol → investigate → search → chase; noise system; alarm meter.
-- WebAudio-synthesized sound (klaxon, siren, drill, tumblers, cash, UI).
+- Single file: `game/index.html` (~57 KB). No libraries, no images, no audio
+  files, no network requests; runs offline from `file://`.
+- Vision cones are raycast against wall/furniture AABBs every frame; guards run
+  a patrol → investigate → search → chase state machine; cameras sweep and feed
+  the same alarm meter.
+- Best score persists in `localStorage` (`vaultline_best`).
 
 ## License
 

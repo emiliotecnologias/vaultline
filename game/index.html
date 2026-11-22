@@ -5,1427 +5,1452 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VAULTLINE — Night at the Meridian</title>
 <style>
-  html, body { margin:0; padding:0; background:#07090f; height:100%; overflow:hidden; }
-  body { display:flex; align-items:center; justify-content:center; font-family:"Segoe UI", system-ui, sans-serif; }
-  canvas { display:block; box-shadow:0 0 60px rgba(30,80,160,.35), 0 0 0 1px #1c2740; border-radius:6px; }
-  #fallback { display:none; color:#dfe7f5; max-width:520px; text-align:center; line-height:1.5; }
+  html, body { margin:0; padding:0; background:#05070d; height:100%; overflow:hidden; }
+  body { display:flex; align-items:center; justify-content:center; }
+  canvas { background:#0b0e16; box-shadow:0 0 60px rgba(0,0,0,.8); }
 </style>
 </head>
 <body>
-<canvas id="game"></canvas>
-<div id="fallback">VAULTLINE needs a browser with Canvas 2D support. Try a recent desktop Chrome, Edge or Firefox.</div>
+<canvas id="game" width="960" height="640"></canvas>
 <script>
 "use strict";
-/* ============================================================
+/* =====================================================================
    VAULTLINE — Night at the Meridian
-   An original top-down bank-heist game in one HTML file.
-   Vanilla JS + Canvas 2D. All art drawn with code, all sound
-   synthesized with WebAudio. Zero network requests at runtime.
-   ============================================================ */
+   An original top-down bank-heist game. Vanilla JS + Canvas 2D.
+   All art drawn in code, all sound synthesized with WebAudio.
+   Zero network requests; runs from file://.
+   ===================================================================== */
 
-// ----------------------------- utils -----------------------------
-const TAU = Math.PI * 2;
-const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
-const lerp = (a, b, t) => a + (b - a) * t;
-const rand = (a, b) => a + Math.random() * (b - a);
-const randi = (a, b) => Math.floor(rand(a, b + 1));
-const pick = arr => arr[Math.floor(Math.random() * arr.length)];
-const dist2 = (x1, y1, x2, y2) => { const dx = x2 - x1, dy = y2 - y1; return dx * dx + dy * dy; };
-const dist = (x1, y1, x2, y2) => Math.sqrt(dist2(x1, y1, x2, y2));
-function angDiff(a, b) { let d = (b - a) % TAU; if (d > Math.PI) d -= TAU; if (d < -Math.PI) d += TAU; return d; }
-function angLerp(a, b, t) { return a + angDiff(a, b) * t; }
-function circleRect(cx, cy, r, rx, ry, rw, rh) {
-  const nx = clamp(cx, rx, rx + rw), ny = clamp(cy, ry, ry + rh);
-  return dist2(cx, cy, nx, ny) < r * r;
+const W = 960, H = 640;
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+
+function fitCanvas(){
+  const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+  cv.style.width = Math.floor(W * s) + 'px';
+  cv.style.height = Math.floor(H * s) + 'px';
 }
-function shade(hex, f) {
-  const n = parseInt(hex.slice(1), 16);
-  const r = clamp(Math.round(((n >> 16) & 255) * f), 0, 255);
-  const g = clamp(Math.round(((n >> 8) & 255) * f), 0, 255);
-  const b = clamp(Math.round((n & 255) * f), 0, 255);
-  return "rgb(" + r + "," + g + "," + b + ")";
+window.addEventListener('resize', fitCanvas);
+fitCanvas();
+
+/* ---------------- utils ---------------- */
+const clamp = (v,a,b)=> v<a?a : v>b?b : v;
+const lerp = (a,b,t)=> a + (b-a)*t;
+const dist = (x1,y1,x2,y2)=> Math.hypot(x2-x1, y2-y1);
+const rand = (a,b)=> a + Math.random()*(b-a);
+function angNorm(a){ while(a>Math.PI) a-=Math.PI*2; while(a<-Math.PI) a+=Math.PI*2; return a; }
+function angDiff(a,b){ return angNorm(a-b); }
+function inRect(x,y,r){ return x>=r.x && x<=r.x+r.w && y>=r.y && y<=r.y+r.h; }
+function circleRect(cx,cy,cr,r){
+  const nx = clamp(cx, r.x, r.x+r.w), ny = clamp(cy, r.y, r.y+r.h);
+  const dx = cx-nx, dy = cy-ny;
+  return dx*dx + dy*dy < cr*cr;
 }
-function segRectHit(x1, y1, x2, y2, r) { // segment vs AABB (slab test); returns t in [0,1] or -1
-  const dx = x2 - x1, dy = y2 - y1;
-  let tmin = 0, tmax = 1;
-  if (Math.abs(dx) < 1e-9) { if (x1 < r.x || x1 > r.x + r.w) return -1; }
+/* Ray vs AABB (slab method). Returns distance t along unit dir, or Infinity. */
+function rayRect(ox,oy,dx,dy,r){
+  let tmin = 0, tmax = Infinity;
+  if (Math.abs(dx) < 1e-9){ if (ox < r.x || ox > r.x+r.w) return Infinity; }
   else {
-    let t1 = (r.x - x1) / dx, t2 = (r.x + r.w - x1) / dx;
-    if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
-    tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2); if (tmin > tmax) return -1;
+    let t1 = (r.x-ox)/dx, t2 = (r.x+r.w-ox)/dx;
+    if (t1 > t2){ const t=t1; t1=t2; t2=t; }
+    tmin = Math.max(tmin,t1); tmax = Math.min(tmax,t2);
+    if (tmin > tmax) return Infinity;
   }
-  if (Math.abs(dy) < 1e-9) { if (y1 < r.y || y1 > r.y + r.h) return -1; }
+  if (Math.abs(dy) < 1e-9){ if (oy < r.y || oy > r.y+r.h) return Infinity; }
   else {
-    let t1 = (r.y - y1) / dy, t2 = (r.y + r.h - y1) / dy;
-    if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
-    tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2); if (tmin > tmax) return -1;
+    let t1 = (r.y-oy)/dy, t2 = (r.y+r.h-oy)/dy;
+    if (t1 > t2){ const t=t1; t1=t2; t2=t; }
+    tmin = Math.max(tmin,t1); tmax = Math.min(tmax,t2);
+    if (tmin > tmax) return Infinity;
   }
   return tmin;
 }
+function losClear(x1,y1,x2,y2,blockers){
+  const dx = x2-x1, dy = y2-y1, d = Math.hypot(dx,dy);
+  if (d < 1) return true;
+  const nx = dx/d, ny = dy/d;
+  for (const r of blockers){ if (rayRect(x1,y1,nx,ny,r) < d-2) return false; }
+  return true;
+}
+function segPointDist(x1,y1,x2,y2,px,py){
+  const dx=x2-x1, dy=y2-y1, L2=dx*dx+dy*dy;
+  let t = L2 ? ((px-x1)*dx + (py-y1)*dy)/L2 : 0;
+  t = clamp(t,0,1);
+  return dist(px,py, x1+dx*t, y1+dy*t);
+}
+function fmt$(n){ return '$' + n.toLocaleString('en-US'); }
 
-// ----------------------------- audio -----------------------------
-const AudioSys = {
-  ctx: null, master: null, muted: false, alarmOsc: null, alarmGain: null, sirenOsc: null, sirenGain: null,
-  init() {
-    if (this.ctx) { if (this.ctx.state === "suspended") this.ctx.resume(); return; }
-    try {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      this.ctx = new AC();
-      this.master = this.ctx.createGain(); this.master.gain.value = 0.5;
-      this.master.connect(this.ctx.destination);
-      // alarm klaxon (two-tone via LFO on frequency)
-      this.alarmOsc = this.ctx.createOscillator(); this.alarmOsc.type = "square"; this.alarmOsc.frequency.value = 620;
-      const lfo = this.ctx.createOscillator(); lfo.type = "square"; lfo.frequency.value = 1.4;
-      const lfoG = this.ctx.createGain(); lfoG.gain.value = 140;
-      lfo.connect(lfoG); lfoG.connect(this.alarmOsc.frequency);
-      this.alarmGain = this.ctx.createGain(); this.alarmGain.gain.value = 0;
-      const af = this.ctx.createBiquadFilter(); af.type = "lowpass"; af.frequency.value = 1600;
-      this.alarmOsc.connect(af); af.connect(this.alarmGain); this.alarmGain.connect(this.master);
-      this.alarmOsc.start(); lfo.start();
-      // police siren (sweep)
-      this.sirenOsc = this.ctx.createOscillator(); this.sirenOsc.type = "triangle"; this.sirenOsc.frequency.value = 800;
-      const slfo = this.ctx.createOscillator(); slfo.type = "sine"; slfo.frequency.value = 0.35;
-      const slfoG = this.ctx.createGain(); slfoG.gain.value = 260;
-      slfo.connect(slfoG); slfoG.connect(this.sirenOsc.frequency);
-      this.sirenGain = this.ctx.createGain(); this.sirenGain.gain.value = 0;
-      this.sirenOsc.connect(this.sirenGain); this.sirenGain.connect(this.master);
-      this.sirenOsc.start(); slfo.start();
-    } catch (e) { this.ctx = null; }
-  },
-  tone(freq, dur, type, vol, slideTo, delay) {
-    if (!this.ctx || this.muted) return;
-    const t = this.ctx.currentTime + (delay || 0);
-    const o = this.ctx.createOscillator(), g = this.ctx.createGain();
-    o.type = type || "sine"; o.frequency.setValueAtTime(freq, t);
-    if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(20, slideTo), t + dur);
-    g.gain.setValueAtTime(vol || 0.2, t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    o.connect(g); g.connect(this.master); o.start(t); o.stop(t + dur + 0.02);
-  },
-  noise(dur, vol, freq, delay) {
-    if (!this.ctx || this.muted) return;
-    const t = this.ctx.currentTime + (delay || 0);
-    const len = Math.max(1, (dur * this.ctx.sampleRate) | 0);
-    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate), d = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
-    const src = this.ctx.createBufferSource(); src.buffer = buf;
-    const f = this.ctx.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = freq || 1800;
-    const g = this.ctx.createGain(); g.gain.value = vol || 0.25;
-    src.connect(f); f.connect(g); g.connect(this.master); src.start(t);
-  },
-  click() { this.tone(880, 0.05, "square", 0.06); },
-  step(sprint) { this.noise(0.05, sprint ? 0.10 : 0.05, 700); },
-  coin() { this.tone(1560, 0.07, "sine", 0.14); this.tone(2090, 0.12, "sine", 0.10, null, 0.05); },
-  cash() { this.tone(1318, 0.09, "sine", 0.16); this.tone(1760, 0.22, "sine", 0.16, null, 0.09); },
-  clunk() { this.tone(90, 0.22, "sine", 0.5, 45); this.noise(0.12, 0.2, 500); },
-  tumbler() { this.tone(2400, 0.04, "square", 0.08); },
-  good() { this.tone(784, 0.1, "sine", 0.18); this.tone(1046, 0.16, "sine", 0.18, null, 0.09); },
-  bad() { this.tone(196, 0.25, "sawtooth", 0.16, 130); },
-  drill() { this.noise(0.3, 0.28, 900); this.tone(70, 0.3, "sawtooth", 0.10, 55); },
-  zap() { this.noise(0.18, 0.22, 3200); this.tone(1400, 0.15, "sawtooth", 0.10, 200); },
-  thud() { this.tone(65, 0.18, "sine", 0.45, 40); },
-  sting(win) {
-    if (win) { [523, 659, 784, 1046].forEach((f, i) => this.tone(f, 0.22, "triangle", 0.2, null, i * 0.11)); }
-    else { [392, 330, 262, 196].forEach((f, i) => this.tone(f, 0.3, "triangle", 0.2, null, i * 0.14)); }
-  },
-  setLoops(alarmOn, sirenLevel) {
-    if (!this.ctx) return;
-    const t = this.ctx.currentTime;
-    this.alarmGain.gain.setTargetAtTime(!this.muted && alarmOn ? 0.045 : 0, t, 0.15);
-    this.sirenGain.gain.setTargetAtTime(!this.muted ? clamp(sirenLevel, 0, 1) * 0.05 : 0, t, 0.3);
-  }
+/* ---------------- audio (all synthesized) ---------------- */
+let AC = null, master = null;
+function audioInit(){
+  if (AC) return;
+  try {
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    master = AC.createGain();
+    master.gain.value = G.muted ? 0 : 0.5;
+    master.connect(AC.destination);
+  } catch(e){ AC = null; }
+}
+function tone(f, dur, type, vol, slide, delay){
+  if (!AC || G.muted) return;
+  type = type || 'sine'; vol = vol || 0.18; delay = delay || 0;
+  const t0 = AC.currentTime + delay;
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, t0);
+  if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, f+slide), t0+dur);
+  g.gain.setValueAtTime(vol, t0);
+  g.gain.exponentialRampToValueAtTime(0.001, t0+dur);
+  o.connect(g); g.connect(master);
+  o.start(t0); o.stop(t0+dur+0.02);
+}
+function noiseBurst(dur, vol, freq, delay){
+  if (!AC || G.muted) return;
+  delay = delay || 0;
+  const len = Math.max(1, (AC.sampleRate*dur)|0);
+  const buf = AC.createBuffer(1, len, AC.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i=0;i<len;i++) d[i] = Math.random()*2-1;
+  const src = AC.createBufferSource(); src.buffer = buf;
+  const f = AC.createBiquadFilter(); f.type='lowpass'; f.frequency.value = freq || 1000;
+  const g = AC.createGain();
+  const t0 = AC.currentTime + delay;
+  g.gain.setValueAtTime(vol, t0);
+  g.gain.exponentialRampToValueAtTime(0.001, t0+dur);
+  src.connect(f); f.connect(g); g.connect(master);
+  src.start(t0);
+}
+const SFX = {
+  click(){ tone(620, .05, 'square', .07); },
+  step(){ noiseBurst(.05, .05, 500); },
+  stepLoud(){ noiseBurst(.07, .12, 700); },
+  coin(){ tone(1560,.07,'sine',.15); tone(2093,.14,'sine',.13,0,.06); },
+  clang(){ tone(220,.3,'square',.2,-120); noiseBurst(.18,.18,2500); },
+  clunk(){ tone(140,.12,'square',.2,-60); noiseBurst(.06,.1,800); },
+  tick(){ tone(900,.03,'square',.05); },
+  pick(){ tone(1100,.04,'square',.06); tone(800,.04,'square',.05,0,.05); },
+  cash(){ noiseBurst(.12,.12,3000); tone(1320,.06,'sine',.1,0,.05); tone(1760,.09,'sine',.1,0,.1); },
+  thud(){ tone(90,.15,'sine',.3,-40); noiseBurst(.08,.15,400); },
+  buzz(){ tone(160,.25,'sawtooth',.15); },
+  door(){ noiseBurst(.15,.1,600); tone(180,.1,'sine',.08,-60); },
+  smoke(){ noiseBurst(.5,.15,900); },
+  jam(){ tone(300,.4,'sawtooth',.1,600); },
+  alarmBeep(){ tone(660,.12,'square',.12); tone(494,.12,'square',.12,0,.14); },
+  siren(){ tone(700,.5,'sine',.1,350); tone(1050,.5,'sine',.1,-350,.5); },
+  win(){ [523,659,784,1047,1319].forEach((f,i)=> tone(f,.22,'triangle',.16,0,i*.12)); },
+  bust(){ [392,330,262,196].forEach((f,i)=> tone(f,.3,'sawtooth',.12,0,i*.16)); },
+  vaultOpen(){ tone(80,.8,'sine',.3,40); noiseBurst(.7,.2,500); tone(196,.5,'square',.1,0,.1); },
 };
 
-// ----------------------------- input -----------------------------
-const keys = {};
-const mouse = { x: 0, y: 0, down: false, clicked: false };
-window.addEventListener("keydown", e => {
-  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
-  keys[e.code] = true; AudioSys.init();
-  onKeyPress(e.code);
-});
-window.addEventListener("keyup", e => { keys[e.code] = false; });
-window.addEventListener("contextmenu", e => e.preventDefault());
-const canvas = document.getElementById("game");
-const ctx = canvas.getContext("2d");
-if (!ctx) document.getElementById("fallback").style.display = "block";
+/* ---------------- map ---------------- */
+const WALLS = [];
+function wall(x,y,w,h){ WALLS.push({x,y,w,h}); }
+/* building shell: x 80..880, y 70..550 */
+wall(80,70,800,10);                 /* top */
+wall(80,540,360,10); wall(520,540,360,10);   /* bottom, front-door gap 440..520 */
+wall(80,70,10,480);                 /* left */
+wall(870,70,10,200); wall(870,310,10,240);   /* right, back-door gap y 270..310 */
+/* manager office (top-left) */
+wall(80,200,120,10); wall(240,200,40,10);    /* door gap x 200..240 */
+wall(270,70,10,140);
+/* office (top-center-left) */
+wall(280,200,70,10); wall(390,200,80,10);    /* door gap x 350..390 */
+wall(460,70,10,140);
+/* security room (top-center-right) */
+wall(470,200,80,10); wall(590,200,70,10);    /* door gap x 550..590 */
+wall(650,70,10,140);
+/* vault (top-right) */
+wall(660,70,10,190);
+wall(660,250,100,10); wall(820,250,60,10);   /* vault door gap x 760..820 */
+/* laser corridor left wall */
+wall(660,260,10,150); wall(660,450,10,100);  /* door gap y 410..450 */
+/* janitor closet */
+wall(200,230,10,50); wall(200,320,10,40);    /* door gap y 280..320 */
+wall(80,350,200,10);                          /* janitor/break divider */
+/* break room right wall */
+wall(270,360,10,70); wall(270,470,10,80);    /* door gap y 430..470 */
+/* lobby divider */
+wall(280,380,150,10); wall(470,380,200,10);  /* archway gap x 430..470 */
 
-// Logical resolution: the whole bank fits in one 960x640 frame.
-const W = 960, H = 640;
-canvas.width = W; canvas.height = H;
-function fitCanvas() {
-  const s = Math.min(window.innerWidth / W, window.innerHeight / H);
-  canvas.style.width = Math.floor(W * s) + "px";
-  canvas.style.height = Math.floor(H * s) + "px";
+const DOORS = [
+  {x:200,y:200,w:40,h:10, locked:true,  open:false, id:'manager',  name:'Manager office door'},
+  {x:350,y:200,w:40,h:10, locked:false, open:false, id:'office',   name:'Office door'},
+  {x:550,y:200,w:40,h:10, locked:true,  open:false, id:'security', name:'Security door', keycard:true},
+  {x:200,y:280,w:10,h:40, locked:false, open:false, id:'janitor',  name:'Janitor closet door'},
+  {x:270,y:430,w:10,h:40, locked:false, open:false, id:'break',    name:'Break room door'},
+  {x:660,y:410,w:10,h:40, locked:false, open:false, id:'corridor', name:'Corridor door'},
+  {x:870,y:270,w:10,h:40, locked:true,  open:false, id:'back',     name:'Back door'},
+];
+const VAULT_DOOR = {x:760,y:250,w:60,h:10};
+
+const FURN = [
+  {x:110,y:110,w:90,h:26, tall:false, kind:'desk'},
+  {x:230,y:84, w:34,h:60, tall:true,  kind:'cabinet'},
+  {x:310,y:110,w:80,h:24, tall:false, kind:'desk'},
+  {x:310,y:150,w:80,h:24, tall:false, kind:'desk'},
+  {x:500,y:100,w:120,h:26,tall:false, kind:'console'},
+  {x:610,y:84, w:34,h:70, tall:true,  kind:'rack'},
+  {x:330,y:430,w:110,h:24,tall:false, kind:'counter'},
+  {x:520,y:430,w:110,h:24,tall:false, kind:'counter'},
+  {x:300,y:500,w:26,h:40, tall:true,  kind:'planter'},
+  {x:630,y:500,w:26,h:40, tall:true,  kind:'planter'},
+  {x:96, y:380,w:60,h:20, tall:true,  kind:'shelf'},
+  {x:96, y:430,w:60,h:20, tall:true,  kind:'shelf'},
+  {x:170,y:480,w:70,h:26, tall:false, kind:'table'},
+  {x:300,y:300,w:70,h:18, tall:false, kind:'bench'},
+  {x:480,y:300,w:70,h:18, tall:false, kind:'bench'},
+  {x:96, y:250,w:50,h:18, tall:true,  kind:'shelf'},
+];
+
+const INTERACT = [
+  {id:'keycard',    x:155,y:123, r:30, label:'Steal the keycard',   time:1.5, done:false},
+  {id:'console',    x:560,y:113, r:38, label:'Loop the cameras',    time:4.0, done:false},
+  {id:'alarmPanel', x:640,y:185, r:28, label:'Disable the alarm',   time:3.0, done:false},
+  {id:'laserSwitch',x:180,y:330, r:28, label:'Cut the laser power', time:2.0, done:false},
+];
+
+const LOOT = [
+  {x:700,y:110,kind:'gold', value:5000, kg:8, taken:false},
+  {x:740,y:110,kind:'gold', value:5000, kg:8, taken:false},
+  {x:780,y:110,kind:'gold', value:5000, kg:8, taken:false},
+  {x:850,y:140,kind:'gold', value:5000, kg:8, taken:false},
+  {x:820,y:110,kind:'cash', value:2000, kg:3, taken:false},
+  {x:700,y:170,kind:'cash', value:2000, kg:3, taken:false},
+  {x:740,y:170,kind:'cash', value:2000, kg:3, taken:false},
+  {x:850,y:200,kind:'cash', value:2000, kg:3, taken:false},
+  {x:780,y:170,kind:'gem',  value:8000, kg:2, taken:false},
+  {x:820,y:170,kind:'gem',  value:8000, kg:2, taken:false},
+];
+
+const VANS = [
+  {x:120,y:582,w:96,h:38, id:'street', label:'GETAWAY'},
+  {x:812,y:8,  w:100,h:38, id:'north', label:'GETAWAY'},
+];
+
+const LASERS = [
+  {x1:674,y1:320,x2:866,y2:320, phase:0.0, cool:0},
+  {x1:674,y1:400,x2:866,y2:400, phase:1.6, cool:0},
+];
+
+const ENTRIES = [
+  {name:'1. Front doors', desc:'Walk in off the street. Exposed — but the van is right there.', spawn:[480,602]},
+  {name:'2. Back alley',  desc:'Slip in by the vault side. Quiet, far from the van.',          spawn:[924,290]},
+  {name:'3. Roof vent',   desc:'Drop into the manager\'s office. The keycard is close.',       spawn:[170,155]},
+];
+
+const LOADOUT = [
+  {id:'lockpick', key:'Q', name:'Lockpick set',  desc:'Pick locked doors (slow, quiet)'},
+  {id:'jammer',   key:'W', name:'Camera jammer', desc:'Blind all cameras 60s — key J, 1 use'},
+  {id:'smoke',    key:'E', name:'Smoke bomb',    desc:'Break line of sight — key X, 1 use'},
+  {id:'baton',    key:'R', name:'Stun baton',    desc:'Silent takedowns from any side — key F'},
+  {id:'duffel',   key:'T', name:'Extra duffel',  desc:'+20 kg loot capacity (60 kg total)'},
+];
+
+function makeGuards(){
+  return [
+    {x:350,y:470, path:[[350,470],[590,470],[590,415],[350,415]], wp:1, state:'patrol', ang:0,
+     tx:0,ty:0, lookT:0, loseT:0, lastX:0,lastY:0, down:false, stuckT:0, lastDist:1e9, bodySeen:false},
+    {x:150,y:300, path:[[150,300],[600,300],[600,248],[150,248]], wp:1, state:'patrol', ang:0,
+     tx:0,ty:0, lookT:0, loseT:0, lastX:0,lastY:0, down:false, stuckT:0, lastDist:1e9, bodySeen:false},
+    {x:640,y:340, path:[[640,340],[640,242],[500,242],[500,340]], wp:1, state:'patrol', ang:0,
+     tx:0,ty:0, lookT:0, loseT:0, lastX:0,lastY:0, down:false, stuckT:0, lastDist:1e9, bodySeen:false},
+  ];
 }
-window.addEventListener("resize", fitCanvas); fitCanvas();
-canvas.addEventListener("mousemove", e => {
-  const r = canvas.getBoundingClientRect();
+function makeCams(){
+  return [
+    {x:645,y:395, base:2.35, sweep:0.75, range:175, fov:0.95, name:'Lobby',    phase:0.0, ang:2.35},
+    {x:860,y:268, base:1.57, sweep:0.55, range:185, fov:0.85, name:'Corridor', phase:1.3, ang:1.57},
+    {x:864,y:86,  base:2.45, sweep:0.85, range:175, fov:0.95, name:'Vault',    phase:2.6, ang:2.45},
+    {x:496,y:86,  base:0.75, sweep:0.95, range:165, fov:0.95, name:'Security', phase:4.1, ang:0.75},
+  ];
+}
+
+/* ---------------- game state ---------------- */
+function loadBest(){ try { return +localStorage.getItem('vaultline_best') || 0; } catch(e){ return 0; } }
+function saveBest(v){ try { localStorage.setItem('vaultline_best', String(v)); } catch(e){} }
+
+const G = {
+  mode:'title', paused:false, time:0, runTime:0,
+  entry:0, loadout:new Set(['lockpick','baton']),
+  alarm:0, alarmOn:false, police:0, seenEver:false, alarmEver:false,
+  hasKeycard:false, camsLooped:false, jamT:0, lasersOff:false,
+  vaultOpen:false, vaultSwing:0,
+  money:0, weight:0, capacity:40, lootCount:0,
+  coins:3, smokeLeft:0, smokeT:0, smokeX:0, smokeY:0,
+  shake:0, channel:null, dial:null,
+  score:0, rank:'', best:loadBest(), bustReason:'',
+  muted:false, msg:'', msgT:0,
+  klaxonT:0, sirenT:0, stepT:0,
+  particles:[], floaters:[], coinProj:null,
+  guards:makeGuards(), cams:makeCams(),
+  player:{x:480,y:602,r:10,ang:-Math.PI/2,crouch:false,moving:false,sprint:false},
+};
+
+function resetRun(){
+  G.alarm=0; G.alarmOn=false; G.police=0; G.seenEver=false; G.alarmEver=false;
+  G.hasKeycard=false; G.camsLooped=false; G.jamT=0; G.lasersOff=false;
+  G.vaultOpen=false; G.vaultSwing=0;
+  G.money=0; G.weight=0; G.lootCount=0;
+  G.capacity = G.loadout.has('duffel') ? 60 : 40;
+  G.coins=3; G.smokeLeft = G.loadout.has('smoke') ? 1 : 0; G.smokeT=0;
+  G.channel=null; G.dial=null; G.runTime=0; G.shake=0;
+  G.particles.length=0; G.floaters.length=0; G.coinProj=null;
+  G.guards = makeGuards(); G.cams = makeCams();
+  for (const d of DOORS) d.open = false;
+  for (const it of INTERACT) it.done = false;
+  for (const l of LOOT) l.taken = false;
+  for (const l of LASERS) l.cool = 0;
+  const s = ENTRIES[G.entry].spawn;
+  G.player.x = s[0]; G.player.y = s[1]; G.player.crouch = false; G.player.ang = -Math.PI/2;
+  G.paused = false;
+}
+
+/* ---------------- collision & sight ---------------- */
+function moveBlockers(){
+  const out = WALLS.slice();
+  for (const f of FURN) out.push(f);
+  for (const d of DOORS) if (!d.open) out.push(d);
+  if (!G.vaultOpen) out.push(VAULT_DOOR);
+  return out;
+}
+function sightBlockers(crouched){
+  const out = WALLS.slice();
+  for (const d of DOORS) if (!d.open) out.push(d);
+  if (!G.vaultOpen) out.push(VAULT_DOOR);
+  if (crouched) for (const f of FURN) if (f.tall) out.push(f);
+  return out;
+}
+function collideMove(e, dx, dy, blockers){
+  /* axis-separated circle vs AABB */
+  let nx = e.x + dx;
+  let hit = false;
+  for (const r of blockers) if (circleRect(nx, e.y, e.r, r)){ hit = true; break; }
+  if (!hit) e.x = nx;
+  let ny = e.y + dy;
+  hit = false;
+  for (const r of blockers) if (circleRect(e.x, ny, e.r, r)){ hit = true; break; }
+  if (!hit) e.y = ny;
+  e.x = clamp(e.x, e.r+2, W-e.r-2);
+  e.y = clamp(e.y, e.r+2, H-e.r-2);
+}
+function inSmoke(x,y){
+  return G.smokeT > 0 && dist(x,y,G.smokeX,G.smokeY) < 95;
+}
+function canSee(ox,oy,ang,range,fov){
+  const p = G.player;
+  const d = dist(ox,oy,p.x,p.y);
+  if (d > range) return 0;
+  const toP = Math.atan2(p.y-oy, p.x-ox);
+  if (Math.abs(angDiff(toP, ang)) > fov/2) return 0;
+  if (inSmoke(p.x,p.y)) return 0;
+  if (!losClear(ox,oy,p.x,p.y, sightBlockers(p.crouch))) return 0;
+  return 1 - d/range; /* 0..1 closeness */
+}
+
+/* ---------------- feedback ---------------- */
+function floater(x,y,text,color){
+  G.floaters.push({x,y,text,color:color||'#ffd94d',t:0});
+}
+function burst(x,y,color,n){
+  for (let i=0;i<(n||10);i++){
+    G.particles.push({x,y,vx:rand(-70,70),vy:rand(-90,20),t:0,life:rand(.3,.8),color});
+  }
+}
+function setMsg(m){ G.msg = m; G.msgT = 3.2; }
+function makeNoise(x,y,radius){
+  for (const g of G.guards){
+    if (g.down) continue;
+    if (dist(x,y,g.x,g.y) <= radius && g.state !== 'chase'){
+      g.state = 'investigate'; g.tx = x; g.ty = y; g.lookT = 0;
+    }
+  }
+}
+function raiseAlarm(amount){
+  if (G.alarmOn) return;
+  G.alarm = clamp(G.alarm + amount, 0, 100);
+  if (G.alarm >= 100){
+    G.alarmOn = true; G.alarmEver = true; G.police = 60;
+    setMsg('ALARM TRIGGERED — police en route!');
+    SFX.alarmBeep();
+  }
+}
+
+/* ---------------- input ---------------- */
+const keys = new Set();
+const mouse = {x:W/2, y:H/2};
+cv.addEventListener('mousemove', e=>{
+  const r = cv.getBoundingClientRect();
   mouse.x = (e.clientX - r.left) * (W / r.width);
   mouse.y = (e.clientY - r.top) * (H / r.height);
 });
-canvas.addEventListener("mousedown", e => { if (e.button === 0) { mouse.down = true; mouse.clicked = true; AudioSys.init(); } });
-window.addEventListener("mouseup", () => { mouse.down = false; });
-// ----------------------------- bank layout -----------------------------
-// One-screen bank. Walls are AABBs; doors are gaps + door objects.
-const WALLS = [];        // {x,y,w,h} solid, blocks movement + sight
-const FURN = [];         // {x,y,w,h,type} furniture; solid ones block movement, tall ones block sight
-const DOORS = [];        // {x,y,w,h,open,locked,lockpickT,name,horiz}
-function wall(x, y, w, h) { WALLS.push({ x, y, w, h }); }
-function furn(x, y, w, h, type, solid, tall) { FURN.push({ x, y, w, h, type, solid: !!solid, tall: !!tall }); }
-function door(x, y, w, h, locked, name, horiz) {
-  const d = { x, y, w, h, open: false, locked: !!locked, lockpickT: 0, name: name || "Door", horiz: !!horiz };
-  DOORS.push(d); return d;
-}
-function buildLayout() {
-  WALLS.length = 0; FURN.length = 0; DOORS.length = 0;
-  const T = 10; // wall thickness
-  // --- outer shell: street strip at bottom (y 560..640), alley at top-right ---
-  wall(0, 0, 960, T);                       // top
-  wall(0, 0, T, 560);                       // left
-  wall(950, 0, T, 560);                     // right
-  wall(0, 550, 400, T); wall(560, 550, 400, T); // front wall with glass-door gap 400..560
-  // --- vault room (top-right): x 700..950, y 10..180 ---
-  wall(700, 10, T, 120); wall(700, 170, 60, T); wall(800, 170, 150, T); // left wall + bottom with door gap 760..800
-  // --- vault antechamber / laser corridor: x 700..950, y 180..250 ---
-  wall(700, 180, T, 70);
-  // --- security room: x 520..700, y 10..150 ---
-  wall(520, 10, T, 90); wall(520, 140, 110, T); wall(670, 140, 30, T); // door gap 630..670
-  // --- manager office: x 10..230, y 10..160 ---
-  wall(230, 10, T, 100); wall(10, 160, 140, T); wall(190, 160, 40, T); // door gap 150..190
-  // --- office 2: x 240..420, y 10..160 ---
-  wall(420, 10, T, 100); wall(240, 160, 120, T); wall(400, 160, 20, T); // door gap 360..400
-  // --- janitor closet: x 430..520, y 10..120 ---
-  wall(430, 120, 40, T); wall(510, 120, 10, T); // door gap 470..510
-  // --- mid corridor wall (y=300) separating offices from lobby, with 3 gaps ---
-  wall(10, 300, 180, T); wall(230, 300, 240, T); wall(510, 300, 220, T); wall(770, 300, 180, T);
-  // gaps at 190..230, 470..510, 730..770
-  // --- teller counter wall (y=430) with 2 gaps ---
-  wall(120, 430, 200, T); wall(360, 430, 240, T); wall(640, 430, 200, T);
-  // gaps at 320..360, 600..640
-  // --- back-alley door (top-right corner, leads outside to alley van) ---
-  // (gap cut in top wall at x 860..900)
-  WALLS[0] = { x: 0, y: 0, w: 860, h: T }; WALLS.push({ x: 900, y: 0, w: 60, h: T });
+cv.addEventListener('click', e=>{
+  audioInit();
+  const r = cv.getBoundingClientRect();
+  const mx = (e.clientX - r.left) * (W / r.width);
+  const my = (e.clientY - r.top) * (H / r.height);
+  if (G.mode === 'plan') planClick(mx,my);
+  else if (G.mode === 'play' && G.dial) dialStop();
+});
+window.addEventListener('keydown', e=>{
+  const k = e.key;
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(k)) e.preventDefault();
+  audioInit();
+  if (e.repeat){ keys.add(k.toLowerCase()); return; }
+  keys.add(k.toLowerCase());
 
-  // doors
-  door(760, 166, 40, 18, true, "Vault door", true);          // antechamber -> vault (keycard/lockpick)
-  door(630, 136, 40, 18, true, "Security door", true);       // corridor -> security room
-  door(150, 156, 40, 18, false, "Manager office", true);
-  door(360, 156, 40, 18, false, "Office", true);
-  door(470, 116, 40, 18, false, "Janitor closet", true);
-  door(860, -4, 40, 18, false, "Alley door", true);          // back exit
-  door(400, 546, 160, 18, false, "Front doors", true);       // glass front (always passable when open)
+  if (k === 'm' || k === 'M'){
+    G.muted = !G.muted;
+    if (master) master.gain.value = G.muted ? 0 : 0.5;
+    setMsg(G.muted ? 'Sound off' : 'Sound on');
+    return;
+  }
 
-  // --- furniture ---
-  // lobby: waiting chairs, plants, info desk
-  furn(60, 470, 90, 26, "chairs", true, false); furn(810, 470, 90, 26, "chairs", true, false);
-  furn(30, 350, 26, 26, "plant", true, true); furn(904, 350, 26, 26, "plant", true, true);
-  furn(455, 470, 50, 30, "desk", true, false);
-  furn(200, 360, 40, 24, "plant", true, true); furn(720, 360, 40, 24, "plant", true, true);
-  // teller counters (cover)
-  furn(140, 405, 160, 22, "counter", true, false); furn(380, 405, 220, 22, "counter", true, false); furn(660, 405, 160, 22, "counter", true, false);
-  // behind-counter desks
-  furn(160, 330, 60, 26, "desk", true, false); furn(430, 330, 60, 26, "desk", true, false); furn(700, 330, 60, 26, "desk", true, false);
-  // manager office: big desk + safe + bookshelf
-  furn(30, 40, 110, 34, "bigdesk", true, false); furn(170, 30, 44, 44, "safe", true, true); furn(30, 110, 80, 20, "shelf", true, true);
-  // office 2: desks + cabinet
-  furn(270, 40, 80, 30, "desk", true, false); furn(270, 100, 80, 30, "desk", true, false); furn(380, 30, 26, 60, "cabinet", true, true);
-  // janitor closet: shelves + mop bucket
-  furn(440, 30, 70, 18, "shelf", true, true); furn(440, 70, 26, 26, "bucket", false, false);
-  // security room: console desk + server racks
-  furn(545, 30, 130, 30, "console", true, false); furn(545, 90, 26, 40, "server", true, true); furn(655, 90, 26, 40, "server", true, true);
-  // vault room: loot tables
-  furn(730, 40, 90, 30, "loottable", true, false); furn(840, 40, 90, 30, "loottable", true, false); furn(785, 110, 90, 30, "loottable", true, false);
-  // corridor plants (hide spots)
-  furn(250, 200, 26, 26, "plant", true, true); furn(660, 200, 26, 26, "plant", true, true);
+  if (G.mode === 'title'){
+    if (k === 'Enter' || k === ' '){ G.mode = 'plan'; SFX.click(); }
+    return;
+  }
+  if (G.mode === 'plan'){
+    if (k === '1') G.entry = 0;
+    else if (k === '2') G.entry = 1;
+    else if (k === '3') G.entry = 2;
+    else {
+      const item = LOADOUT.find(l => l.key === k.toUpperCase());
+      if (item) toggleLoadout(item.id);
+      else if (k === 'Enter'){ startJob(); }
+    }
+    return;
+  }
+  if (G.mode === 'win' || G.mode === 'busted'){
+    if (k === 'Enter' || k === 'r' || k === 'R'){ G.mode = 'plan'; SFX.click(); }
+    return;
+  }
+  if (G.mode === 'play'){
+    if (k === 'p' || k === 'P' || k === 'Escape'){ G.paused = !G.paused; SFX.click(); return; }
+    if (G.paused) return;
+    if (k === 'r' || k === 'R'){ G.mode = 'plan'; return; }
+    if (G.dial){
+      if (k === ' ') dialStop();
+      return;
+    }
+    if (k === 'c' || k === 'C' || k === 'Control'){ G.player.crouch = !G.player.crouch; SFX.tick(); }
+    else if (k === 'q' || k === 'Q') throwCoin();
+    else if (k === 'f' || k === 'F') tryTakedown();
+    else if (k === 'x' || k === 'X') useSmoke();
+    else if (k === 'j' || k === 'J') useJammer();
+    else if (k === 'e' || k === 'E') interactPress();
+  }
+});
+window.addEventListener('keyup', e=>{ keys.delete(e.key.toLowerCase()); });
+
+function toggleLoadout(id){
+  if (G.loadout.has(id)){ G.loadout.delete(id); SFX.click(); }
+  else if (G.loadout.size < 2){ G.loadout.add(id); SFX.click(); }
+  else { SFX.tick(); setMsg('Pick exactly 2 — unpick one first'); }
 }
-const SOLIDS = () => {
-  const s = WALLS.slice();
-  for (const f of FURN) if (f.solid) s.push(f);
-  for (const d of DOORS) if (!d.open) s.push(d);
-  return s;
-};
-const SIGHT_BLOCKERS = () => {
-  const s = WALLS.slice();
-  for (const f of FURN) if (f.tall) s.push(f);
-  for (const d of DOORS) if (!d.open) s.push(d);
-  return s;
-};
-function losClear(x1, y1, x2, y2) {
-  const blockers = SIGHT_BLOCKERS();
-  for (const b of blockers) { const t = segRectHit(x1, y1, x2, y2, b); if (t >= 0 && t < 1) return false; }
-  return true;
-}
-function rayDist(x, y, ang, maxD) {
-  const x2 = x + Math.cos(ang) * maxD, y2 = y + Math.sin(ang) * maxD;
-  let best = maxD;
-  for (const b of SIGHT_BLOCKERS()) { const t = segRectHit(x, y, x2, y2, b); if (t >= 0) best = Math.min(best, t * maxD); }
-  return best;
-}
-function collide(e, nx, ny) {
-  // circle vs solids, axis-separated slide
-  const solids = SOLIDS();
-  let x = nx, y = e.y;
-  for (const s of solids) if (circleRect(x, y, e.r, s.x, s.y, s.w, s.h)) { x = e.x; break; }
-  y = ny;
-  for (const s of solids) if (circleRect(x, y, e.r, s.x, s.y, s.w, s.h)) { y = e.y; break; }
-  e.x = clamp(x, e.r + 2, W - e.r - 2); e.y = clamp(y, e.r + 2, H - e.r - 2);
+function startJob(){
+  if (G.loadout.size !== 2){ setMsg('Pick exactly 2 loadout items'); SFX.tick(); return; }
+  resetRun();
+  G.mode = 'play';
+  SFX.door();
+  setMsg('The job is on. Stay invisible.');
 }
 
-// ----------------------------- game state -----------------------------
-const LOADOUT_ITEMS = [
-  { id: "picks", name: "Lockpick set", desc: "Pick locked doors (slow, quiet)" },
-  { id: "jammer", name: "Camera jammer", desc: "Loop cameras from anywhere (1 use)" },
-  { id: "smoke", name: "Smoke bomb", desc: "Break line of sight (1 use, key X)" },
-  { id: "baton", name: "Stun baton", desc: "Silent takedowns from behind (F)" },
-  { id: "duffel", name: "Extra duffel", desc: "+20 kg loot capacity" }
-];
-const ENTRIES = [
-  { id: "front", name: "Front doors", desc: "Walk in off the street. Exposed, but the van is right there.", x: 480, y: 585 },
-  { id: "alley", name: "Back alley", desc: "Slip in by the vault side. Quiet, far from the van.", x: 880, y: 26 },
-  { id: "vent", name: "Roof vent", desc: "Drop into the manager's office. Keycard is close.", x: 120, y: 90 }
-];
-const G = {
-  mode: "title",           // title | plan | play | pause | win | busted
-  time: 0,                 // run clock (seconds, play only)
-  attractT: 0,
-  entry: 0, loadout: [true, false, false, true, false], // default: picks + baton
-  alarm: 0,                // 0..100 alarm meter
-  alarmOn: false,          // alarm triggered
-  policeETA: -1,           // seconds until police arrive (-1 = not coming)
-  policeHere: false,
-  seen: false,             // ever fully spotted
-  lootValue: 0, lootWeight: 0, maxWeight: 40,
-  hasKeycard: false,
-  camsLooped: 0,           // seconds remaining
-  lasersOn: true,
-  vaultOpen: false, vaultCracking: false,
-  objective: 0,
-  banner: null, toast: null,
-  shake: 0,
-  best: 0, bestRank: ""
-};
-try {
-  G.best = parseInt(localStorage.getItem("vaultline_best") || "0", 10) || 0;
-  G.bestRank = localStorage.getItem("vaultline_rank") || "";
-} catch (e) { /* storage unavailable */ }
-
-const player = {
-  x: 480, y: 585, r: 10, angle: -Math.PI / 2, speed: 0,
-  crouch: false, sprint: false, stepT: 0, walkPhase: 0,
-  channel: null,        // {label, t, dur, onDone}
-  coins: 3, smoke: 0, jammerUsed: false
-};
-let guards = [], cameras = [], loot = [], particles = [], floaters = [], coinsThrown = [];
-let janitor = null, vanZone = null, alleyVanZone = null;
-let vault = { x: 830, y: 95, r: 34, state: "locked", openT: 0 }; // locked|cracking|opening|open
-let crack = null; // mini-game state {needle, dir, tumblers, zoneC, zoneW}
-let lasers = [];  // {x1,y1,x2,y2,on,phase}
-let interactables = [];
-let smokeClouds = [];
-
-function hasItem(id) { const i = LOADOUT_ITEMS.findIndex(l => l.id === id); return i >= 0 && G.loadout[i]; }
-function banner(title, sub) { G.banner = { title, sub: sub || "", t: 3.2 }; }
-function toast(text) { G.toast = { text, t: 2.6 }; }
-function floater(x, y, text, color) { floaters.push({ x, y, text, color: color || "#ffd166", t: 1.4 }); }
-function burst(x, y, n, color, spd, life) {
-  for (let i = 0; i < n; i++) {
-    const a = rand(0, TAU), s = rand(spd * 0.3, spd);
-    particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: rand(life * 0.5, life), maxLife: life, color, size: rand(1.5, 3.5) });
+/* ---------------- actions ---------------- */
+function throwCoin(){
+  if (G.coins <= 0){ setMsg('Out of coins'); return; }
+  if (G.coinProj) return;
+  G.coins--;
+  const p = G.player;
+  const a = Math.atan2(mouse.y - p.y, mouse.x - p.x);
+  G.coinProj = {x:p.x, y:p.y, vx:Math.cos(a)*320, vy:Math.sin(a)*320, t:0};
+}
+function useSmoke(){
+  if (!G.loadout.has('smoke') || G.smokeLeft <= 0){ setMsg('No smoke bomb'); return; }
+  G.smokeLeft--; G.smokeT = 4.5; G.smokeX = G.player.x; G.smokeY = G.player.y;
+  SFX.smoke(); burst(G.player.x, G.player.y, '#cfd6e4', 16);
+  setMsg('Smoke out — move!');
+}
+function useJammer(){
+  if (!G.loadout.has('jammer')){ setMsg('No camera jammer in loadout'); return; }
+  if (G.jamT > 0){ setMsg('Jammer already running'); return; }
+  if (G.jammerUsed){ setMsg('Jammer spent'); return; }
+  G.jammerUsed = true; G.jamT = 60;
+  SFX.jam(); setMsg('Cameras blind for 60s');
+}
+function tryTakedown(){
+  const p = G.player;
+  let best = null, bd = 30;
+  for (const g of G.guards){
+    if (g.down) continue;
+    const d = dist(p.x,p.y,g.x,g.y);
+    if (d < bd){ bd = d; best = g; }
+  }
+  if (!best){ setMsg('No guard in reach'); return; }
+  const toThief = Math.atan2(p.y-best.y, p.x-best.x);
+  const behind = Math.abs(angDiff(toThief, best.ang)) > 2.0;
+  if (behind || G.loadout.has('baton')){
+    best.down = true; best.state = 'down';
+    SFX.thud(); burst(best.x, best.y, '#9fb4ff', 10);
+    floater(best.x, best.y-18, 'DOWN', '#9fb4ff');
+  } else {
+    setMsg('Too risky — get behind him, or bring the baton');
+    SFX.tick();
   }
 }
-function makeNoise(x, y, radius) {
-  for (const g of guards) {
-    if (g.state === "down") continue;
-    if (dist(g.x, g.y, x, y) < radius) {
-      if (g.state === "patrol" || g.state === "search") { g.state = "investigate"; g.tx = x; g.ty = y; g.stateT = 0; }
+
+/* interact: find what E would act on right now */
+function nearestInteract(){
+  const p = G.player;
+  /* vault door */
+  if (!G.vaultOpen && G.vaultSwing <= 0 && !G.dial){
+    const cx = VAULT_DOOR.x + VAULT_DOOR.w/2, cy = VAULT_DOOR.y + VAULT_DOOR.h/2;
+    if (dist(p.x,p.y,cx,cy) < 46) return {kind:'vault', label:'Crack the vault dial'};
+  }
+  /* loot */
+  if (G.vaultOpen){
+    for (const l of LOOT){
+      if (!l.taken && dist(p.x,p.y,l.x,l.y) < 26) return {kind:'loot', item:l, label:'Grab ' + lootName(l)};
     }
   }
-}
-
-function resetRun() {
-  buildLayout();
-  G.time = 0; G.alarm = 0; G.alarmOn = false; G.policeETA = -1; G.policeHere = false;
-  G.seen = false; G.lootValue = 0; G.lootWeight = 0; G.hasKeycard = false;
-  G.camsLooped = 0; G.lasersOn = true; G.vaultOpen = false; G.vaultCracking = false;
-  G.objective = 0; G.banner = null; G.toast = null; G.shake = 0;
-  G.maxWeight = hasItem("duffel") ? 60 : 40;
-  const e = ENTRIES[G.entry];
-  player.x = e.x; player.y = e.y; player.angle = e.id === "alley" ? Math.PI / 2 : -Math.PI / 2;
-  player.channel = null; player.coins = 3; player.smoke = hasItem("smoke") ? 1 : 0; player.jammerUsed = false;
-  vault = { x: 830, y: 95, r: 34, state: "locked", openT: 0 };
-  crack = null; particles = []; floaters = []; coinsThrown = []; smokeClouds = [];
-  guards = [
-    { x: 480, y: 480, r: 10, angle: 0, speed: 62, state: "patrol", wp: 0, stateT: 0, seeT: 0, tx: 0, ty: 0, lastX: 0, lastY: 0,
-      path: [[480, 480], [140, 480], [140, 370], [480, 370], [820, 370], [820, 480]], color: "#3d5a80", flash: true },
-    { x: 330, y: 230, r: 10, angle: Math.PI, speed: 58, state: "patrol", wp: 0, stateT: 0, seeT: 0, tx: 0, ty: 0, lastX: 0, lastY: 0,
-      path: [[330, 230], [120, 230], [120, 90], [330, 90], [330, 230], [600, 230]], color: "#3d5a80", flash: true },
-    { x: 780, y: 215, r: 10, angle: Math.PI / 2, speed: 55, state: "patrol", wp: 0, stateT: 0, seeT: 0, tx: 0, ty: 0, lastX: 0, lastY: 0,
-      path: [[780, 215], [890, 215], [890, 260], [730, 260]], color: "#3d5a80", flash: true }
-  ];
-  cameras = [
-    { x: 480, y: 318, base: Math.PI / 2, sweep: 0.85, phase: 0, range: 150, half: 0.42, name: "Lobby cam" },
-    { x: 205, y: 318, base: -Math.PI / 2, sweep: 0.7, phase: 2, range: 140, half: 0.42, name: "Corridor cam" },
-    { x: 825, y: 258, base: -Math.PI / 2, sweep: 0.9, phase: 4, range: 140, half: 0.42, name: "Vault cam" },
-    { x: 610, y: 158, base: Math.PI / 2, sweep: 0.6, phase: 1, range: 130, half: 0.42, name: "Security cam" }
-  ];
-  janitor = { x: 250, y: 500, r: 9, angle: 0, speed: 42, state: "wander", tx: 250, ty: 500, stateT: 0, color: "#90be6d" };
-  loot = [
-    { x: 775, y: 55, type: "gold", name: "Gold bars", value: 8000, weight: 12, taken: false },
-    { x: 885, y: 55, type: "gold", name: "Gold bars", value: 8000, weight: 12, taken: false },
-    { x: 830, y: 125, type: "cash", name: "Cash bricks", value: 4500, weight: 6, taken: false },
-    { x: 755, y: 125, type: "gems", name: "Gem case", value: 6000, weight: 2, taken: false },
-    { x: 905, y: 125, type: "cash", name: "Cash bricks", value: 4500, weight: 6, taken: false },
-    { x: 192, y: 52, type: "cash", name: "Office safe cash", value: 2500, weight: 4, taken: false }
-  ];
-  lasers = [
-    { x1: 716, y1: 200, x2: 944, y2: 200, phase: 0 },
-    { x1: 716, y1: 232, x2: 944, y2: 232, phase: 1.6 }
-  ];
-  vanZone = { x: 430, y: 592, w: 100, h: 44 };
-  alleyVanZone = { x: 838, y: 0, w: 64, h: 12 };
-  interactables = [
-    { x: 85, y: 57, r: 26, label: "Take the keycard", id: "keycard", done: false },
-    { x: 192, y: 52, r: 26, label: "Crack the office safe", id: "safe", done: false },
-    { x: 610, y: 45, r: 30, label: "Loop the cameras", id: "console", done: false },
-    { x: 610, y: 125, r: 28, label: "Disable the alarm", id: "alarmPanel", done: false },
-    { x: 475, y: 39, r: 26, label: "Cut laser power", id: "power", done: false },
-    { x: 830, y: 140, r: 40, label: "Crack the vault", id: "vault", done: false }
-  ];
-}
-
-const OBJECTIVES = [
-  "Get inside the Meridian",
-  "Reach the vault — keycard helps",
-  "Crack the vault",
-  "Grab the loot",
-  "Escape to a getaway van"
-];
-// ----------------------------- update -----------------------------
-function canSee(gx, gy, gAng, range, half, px, py) {
-  const d = dist(gx, gy, px, py);
-  if (d > range) return 0;
-  const ang = Math.atan2(py - gy, px - gx);
-  if (Math.abs(angDiff(gAng, ang)) > half && d > 26) return 0;
-  if (!losClear(gx, gy, px, py)) return 0;
-  // smoke blocks sight
-  for (const s of smokeClouds) if (dist(s.x, s.y, px, py) < s.r) return 0;
-  return clamp(1 - d / range, 0.15, 1); // visibility strength 0..1
-}
-function playerVisibility() {
-  let v = 1;
-  if (player.crouch) v *= 0.55;
-  if (player.sprint) v *= 1.5;
-  // hiding behind tall furniture or in plant cover
-  for (const f of FURN) {
-    if (f.tall && dist(player.x, player.y, f.x + f.w / 2, f.y + f.h / 2) < Math.max(f.w, f.h) / 2 + 16) { v *= 0.35; break; }
+  /* doors */
+  for (const d of DOORS){
+    const cx = d.x + d.w/2, cy = d.y + d.h/2;
+    if (dist(p.x,p.y,cx,cy) < 34){
+      if (d.open) return {kind:'door', door:d, label:'Close the door'};
+      if (!d.locked) return {kind:'door', door:d, label:'Open the door'};
+      if (d.keycard && G.hasKeycard) return {kind:'door', door:d, label:'Swipe the keycard'};
+      if (G.loadout.has('lockpick')) return {kind:'pick', door:d, label:'Pick the lock', time:3};
+      return {kind:'blocked', door:d, label: d.keycard ? 'Locked — needs the keycard' : 'Locked — no lockpicks'};
+    }
   }
-  return v;
-}
-function triggerAlarm() {
-  if (G.alarmOn) return;
-  G.alarmOn = true; G.alarm = 100;
-  if (G.policeETA < 0) G.policeETA = 50;
-  banner("ALARM TRIGGERED", "Police inbound — grab what you can and run");
-  AudioSys.bad();
-}
-function addAlarm(n) {
-  if (G.alarmOn) return;
-  G.alarm = clamp(G.alarm + n, 0, 100);
-  if (G.alarm >= 100) triggerAlarm();
-}
-function startChannel(label, dur, onDone) {
-  player.channel = { label, t: 0, dur, onDone };
-}
-function nearestInteractable() {
-  let best = null, bd = 1e9;
-  for (const it of interactables) {
+  /* channel interactables */
+  for (const it of INTERACT){
     if (it.done) continue;
-    const d = dist(player.x, player.y, it.x, it.y);
-    if (d < it.r + 14 && d < bd) { bd = d; best = it; }
+    if (dist(p.x,p.y,it.x,it.y) < it.r) return {kind:'channel', item:it, label:it.label, time:it.time};
   }
-  // loot pickup
-  for (const l of loot) {
-    if (l.taken) continue;
-    const d = dist(player.x, player.y, l.x, l.y);
-    if (d < 30 && d < bd) { bd = d; best = { id: "loot", lootRef: l, label: "Grab " + l.name + " ($" + l.value.toLocaleString() + ", " + l.weight + "kg)" }; }
-  }
-  // doors
-  for (const d of DOORS) {
-    const cx = d.x + d.w / 2, cy = d.y + d.h / 2;
-    const dd = dist(player.x, player.y, cx, cy);
-    if (dd < 34 && dd < bd) {
-      bd = dd;
-      best = { id: "door", doorRef: d, label: d.open ? "Close " + d.name : (d.locked ? (G.hasKeycard ? "Swipe keycard: " + d.name : (hasItem("picks") ? "Pick lock: " + d.name : d.name + " (locked)")) : "Open " + d.name) };
-    }
-  }
-  return best;
+  return null;
 }
-function doInteract(it) {
-  if (!it) return;
-  if (it.id === "loot") {
-    const l = it.lootRef;
-    if (G.lootWeight + l.weight > G.maxWeight) { toast("Too heavy! Drop something or take lighter loot."); AudioSys.bad(); return; }
-    l.taken = true; G.lootValue += l.value; G.lootWeight += l.weight;
-    floater(l.x, l.y - 14, "+$" + l.value.toLocaleString(), "#ffd166");
-    burst(l.x, l.y, 10, "#ffd166", 60, 0.5); AudioSys.cash();
-    if (G.objective < 3) G.objective = 3;
-    if (G.policeETA < 0 && G.vaultOpen) { G.policeETA = 75; toast("Silent alarm tripped — police ETA 1:15"); }
+function lootName(l){ return l.kind==='gold' ? 'gold bar' : l.kind==='cash' ? 'cash brick' : 'gem case'; }
+
+function interactPress(){
+  const t = nearestInteract();
+  if (!t) return;
+  if (t.kind === 'vault'){ startDial(); return; }
+  if (t.kind === 'loot'){
+    const l = t.item;
+    if (G.weight + l.kg > G.capacity){ setMsg('Duffel full! (' + G.weight + '/' + G.capacity + ' kg)'); SFX.tick(); return; }
+    l.taken = true; G.weight += l.kg; G.money += l.value; G.lootCount++;
+    SFX.cash(); burst(l.x, l.y, '#ffd94d', 12);
+    floater(l.x, l.y-14, '+' + fmt$(l.value) + ' (' + l.kg + 'kg)', '#ffd94d');
     return;
   }
-  if (it.id === "door") {
-    const d = it.doorRef;
-    if (d.open) { d.open = false; AudioSys.click(); return; }
-    if (d.locked) {
-      if (G.hasKeycard) { d.open = true; d.locked = false; AudioSys.good(); toast("Keycard accepted"); return; }
-      if (hasItem("picks")) {
-        startChannel("Picking lock…", 3.5, () => { d.open = true; d.locked = false; AudioSys.good(); toast("Lock picked"); });
-        return;
-      }
-      toast("Locked. You need the keycard (manager's office) or lockpicks."); AudioSys.bad(); return;
-    }
-    d.open = true; AudioSys.click(); return;
-  }
-  if (it.id === "keycard") {
-    it.done = true; G.hasKeycard = true; AudioSys.good();
-    floater(it.x, it.y - 16, "KEYCARD", "#8ecae6"); banner("KEYCARD ACQUIRED", "Security and vault doors will open");
-    if (G.objective < 1) G.objective = 1;
+  if (t.kind === 'door'){
+    t.door.open = !t.door.open;
+    SFX.door();
     return;
   }
-  if (it.id === "safe") {
-    startChannel("Cracking office safe…", 4, () => {
-      it.done = true;
-      const l = loot.find(x => x.type === "cash" && x.x === 192);
-      if (l && !l.taken) { /* loot now grabbable */ }
-      toast("Safe open — grab the cash");
-      AudioSys.clunk();
-    });
+  if (t.kind === 'blocked'){ setMsg(t.label); SFX.tick(); return; }
+  /* pick / channel start on hold — handled in update via E held */
+}
+
+function completeChannel(ch){
+  if (ch.kind === 'pick'){
+    ch.door.locked = false; ch.door.open = true;
+    SFX.pick(); SFX.door(); floater(G.player.x, G.player.y-20, 'LOCK PICKED', '#9fe8a9');
     return;
   }
-  if (it.id === "console") {
-    startChannel("Looping camera feeds…", 3, () => {
-      it.done = true; G.camsLooped = 75; AudioSys.good();
-      banner("CAMERAS LOOPED", "75 seconds of blind cameras");
-    });
-    return;
-  }
-  if (it.id === "alarmPanel") {
-    if (!G.hasKeycard) { toast("Alarm panel needs the keycard."); AudioSys.bad(); return; }
-    startChannel("Disabling alarm…", 4, () => {
-      it.done = true; G.alarm = 0; AudioSys.good();
-      banner("ALARM DISABLED", "The vault drill won't call the police");
-      G.alarmDisabled = true;
-    });
-    return;
-  }
-  if (it.id === "power") {
-    startChannel("Cutting laser power…", 2.5, () => {
-      it.done = true; G.lasersOn = false; AudioSys.zap();
-      banner("LASERS DOWN", "The vault corridor is clear");
-    });
-    return;
-  }
-  if (it.id === "vault") {
-    if (vault.state === "locked") {
-      vault.state = "cracking"; G.vaultCracking = true;
-      crack = { needle: 0, dir: 1, tumblers: 0, zoneC: rand(0.3, 0.7), zoneW: 0.22, speed: 1.5 };
-      if (G.objective < 2) G.objective = 2;
-      toast("Crack the dial: stop the needle in the green (Space / Click)");
-    }
-    return;
+  const it = ch.item;
+  it.done = true;
+  if (it.id === 'keycard'){
+    G.hasKeycard = true; SFX.cash();
+    floater(it.x, it.y-16, 'KEYCARD STOLEN', '#9fe8a9');
+    setMsg('Keycard in hand — the security room is open to you');
+  } else if (it.id === 'console'){
+    G.camsLooped = true; SFX.jam();
+    floater(it.x, it.y-16, 'CAMERAS LOOPED', '#9fe8a9');
+    setMsg('Every camera is playing last night\'s tape');
+  } else if (it.id === 'alarmPanel'){
+    G.alarmOn = false; G.alarm = 0; G.police = 0; SFX.clunk();
+    floater(it.x, it.y-16, 'ALARM DISABLED', '#9fe8a9');
+    setMsg('Alarm dead. The night is yours again');
+  } else if (it.id === 'laserSwitch'){
+    G.lasersOff = true; SFX.clunk();
+    floater(it.x, it.y-16, 'LASERS OFF', '#9fe8a9');
+    setMsg('Laser grid powered down');
   }
 }
-function crackAttempt() {
-  if (!crack) return;
-  const n = crack.needle;
-  if (n >= crack.zoneC - crack.zoneW / 2 && n <= crack.zoneC + crack.zoneW / 2) {
-    crack.tumblers++; AudioSys.tumbler(); AudioSys.good();
-    burst(vault.x, vault.y, 8, "#8ecae6", 50, 0.4);
-    if (crack.tumblers >= 3) {
-      crack = null; G.vaultCracking = false; vault.state = "opening"; vault.openT = 0;
-      banner("VAULT CRACKED", "The door is swinging open…");
-      makeNoise(vault.x, vault.y, 200);
+
+/* ---------------- vault dial minigame ---------------- */
+function startDial(){
+  G.dial = { tumbler:0, needle:rand(0,Math.PI*2), zoneStart:rand(0,Math.PI*2),
+             sizes:[1.15, 0.85, 0.6], speeds:[2.1, 2.7, 3.3] };
+  SFX.clunk();
+  setMsg('Stop the needle in the green — 3 tumblers');
+}
+function dialStop(){
+  const d = G.dial; if (!d) return;
+  const n = ((d.needle % (Math.PI*2)) + Math.PI*2) % (Math.PI*2);
+  const zs = ((d.zoneStart % (Math.PI*2)) + Math.PI*2) % (Math.PI*2);
+  let rel = n - zs; if (rel < 0) rel += Math.PI*2;
+  if (rel <= d.sizes[d.tumbler]){
+    d.tumbler++; SFX.clunk();
+    burst(G.player.x, G.player.y-10, '#9fe8a9', 8);
+    if (d.tumbler >= 3){
+      G.dial = null; G.vaultSwing = 6;
+      setMsg('The vault door is swinging open — loud!');
+      makeNoise(VAULT_DOOR.x+30, VAULT_DOOR.y+5, 260);
     } else {
-      crack.zoneC = rand(0.25, 0.75); crack.zoneW *= 0.78; crack.speed *= 1.25;
+      d.zoneStart = rand(0, Math.PI*2);
+      floater(G.player.x, G.player.y-24, 'TUMBLER ' + d.tumbler + '/3', '#9fe8a9');
     }
   } else {
-    AudioSys.bad(); addAlarm(10); makeNoise(vault.x, vault.y, 150); G.shake = Math.max(G.shake, 4);
-    floater(vault.x, vault.y - 50, "CLANG!", "#ef476f");
+    SFX.clang(); G.shake = 6;
+    raiseAlarm(18);
+    floater(G.player.x, G.player.y-24, 'CLANG!', '#ff6b6b');
   }
 }
-function updatePlayer(dt) {
-  const ch = player.channel;
-  if (ch) {
-    ch.t += dt;
-    if (ch.t >= ch.dur) { player.channel = null; ch.onDone(); }
-    return; // rooted while channeling
+
+/* ---------------- update ---------------- */
+function update(dt){
+  G.time += dt;
+  if (G.msgT > 0) G.msgT -= dt;
+  /* particles & floaters always tick */
+  for (let i=G.particles.length-1;i>=0;i--){
+    const p = G.particles[i]; p.t += dt;
+    p.x += p.vx*dt; p.y += p.vy*dt; p.vy += 160*dt;
+    if (p.t > p.life) G.particles.splice(i,1);
   }
-  let mx = 0, my = 0;
-  if (keys.KeyW || keys.ArrowUp) my -= 1;
-  if (keys.KeyS || keys.ArrowDown) my += 1;
-  if (keys.KeyA || keys.ArrowLeft) mx -= 1;
-  if (keys.KeyD || keys.ArrowRight) mx += 1;
-  const len = Math.hypot(mx, my) || 1;
-  player.crouch = !!(keys.KeyC || keys.ControlLeft);
-  player.sprint = !!(keys.ShiftLeft || keys.ShiftRight) && !player.crouch;
-  const loadSlow = 1 - (G.lootWeight / G.maxWeight) * 0.35;
-  const spd = (player.crouch ? 78 : player.sprint ? 205 : 135) * loadSlow;
-  if (mx || my) {
-    player.angle = Math.atan2(my, mx);
-    collide(player, player.x + (mx / len) * spd * dt, player.y + (my / len) * spd * dt);
-    player.walkPhase += dt * (player.sprint ? 14 : 9);
-    player.stepT -= dt;
-    if (player.stepT <= 0) {
-      player.stepT = player.sprint ? 0.24 : 0.36;
-      AudioSys.step(player.sprint);
-      if (player.sprint) makeNoise(player.x, player.y, 95);
-      else if (!player.crouch) makeNoise(player.x, player.y, 34);
+  for (let i=G.floaters.length-1;i>=0;i--){
+    const f = G.floaters[i]; f.t += dt; f.y -= 22*dt;
+    if (f.t > 1.4) G.floaters.splice(i,1);
+  }
+  if (G.mode === 'title'){ updateGuards(dt, true); updateCams(dt); return; }
+  if (G.mode !== 'play' || G.paused) return;
+
+  G.runTime += dt;
+  if (G.shake > 0) G.shake = Math.max(0, G.shake - dt*14);
+  if (G.smokeT > 0) G.smokeT -= dt;
+  if (G.jamT > 0) G.jamT -= dt;
+
+  updatePlayer(dt);
+  updateCoin(dt);
+  updateGuards(dt, false);
+  updateCams(dt);
+  updateLasers(dt);
+  updateChannel(dt);
+
+  if (G.dial){
+    const d = G.dial;
+    d.needle += d.speeds[d.tumbler] * dt;
+    if (Math.random() < dt*6) SFX.tick();
+  }
+  if (G.vaultSwing > 0){
+    G.vaultSwing -= dt;
+    raiseAlarm(3.5*dt);
+    if (G.vaultSwing <= 0){
+      G.vaultOpen = true; G.shake = 10; SFX.vaultOpen();
+      setMsg('Vault open — grab what you can carry');
+      burst(VAULT_DOOR.x+30, VAULT_DOOR.y+5, '#ffd94d', 24);
     }
   }
-  // lasers: crossing an active beam trips the alarm
-  if (G.lasersOn) {
-    for (const L of lasers) {
-      const on = (Math.sin(G.time * 1.4 + L.phase) > -0.25); // beams blink
-      if (!on) continue;
-      // distance point-to-segment
-      const vx = L.x2 - L.x1, vy = L.y2 - L.y1, wx = player.x - L.x1, wy = player.y - L.y1;
-      const c1 = vx * wx + vy * wy, c2 = vx * vx + vy * vy;
-      const t = clamp(c1 / c2, 0, 1);
-      const px = L.x1 + vx * t, py = L.y1 + vy * t;
-      if (dist(player.x, player.y, px, py) < player.r + 2) {
-        addAlarm(45); G.shake = Math.max(G.shake, 5); AudioSys.zap();
-        floater(player.x, player.y - 18, "LASER!", "#ef476f");
-        player.y += (player.y < py ? -14 : 14); // bounce off the beam
-      }
+
+  /* alarm decay when unseen */
+  if (!G.alarmOn && !G.anySeen) G.alarm = Math.max(0, G.alarm - 5*dt);
+  /* police */
+  if (G.alarmOn){
+    G.police -= dt;
+    G.klaxonT -= dt;
+    if (G.klaxonT <= 0){ SFX.alarmBeep(); G.klaxonT = 0.9; }
+    if (G.police < 12 && G.police > 0){
+      G.sirenT -= dt;
+      if (G.sirenT <= 0){ SFX.siren(); G.sirenT = 1.1; }
+    }
+    if (G.police <= 0){ busted('The police arrived.'); return; }
+  }
+  /* win check */
+  for (const v of VANS){
+    if (inRect(G.player.x, G.player.y, v)){
+      if (G.money > 0){ win(); return; }
+      else if (G.msgT <= 0) setMsg('No loot yet — the van waits.');
     }
   }
 }
-function guardMove(g, tx, ty, spd, dt) {
-  const d = dist(g.x, g.y, tx, ty);
+
+function updatePlayer(dt){
+  const p = G.player;
+  if (G.dial){ p.moving = false; return; }
+  let dx = 0, dy = 0;
+  if (keys.has('a') || keys.has('arrowleft')) dx -= 1;
+  if (keys.has('d') || keys.has('arrowright')) dx += 1;
+  if (keys.has('w') || keys.has('arrowup')) dy -= 1;
+  if (keys.has('s') || keys.has('arrowdown')) dy += 1;
+  const len = Math.hypot(dx,dy);
+  p.moving = len > 0;
+  p.sprint = (keys.has('shift')) && !p.crouch && p.moving;
+  if (p.moving){
+    dx/=len; dy/=len;
+    let speed = p.crouch ? 78 : p.sprint ? 218 : 138;
+    speed *= (1 - 0.35 * (G.weight / G.capacity));
+    collideMove(p, dx*speed*dt, dy*speed*dt, moveBlockers());
+    p.ang = Math.atan2(dy,dx);
+    G.channel = null; /* moving breaks channels */
+    G.stepT -= dt * (p.sprint ? 2.2 : 1);
+    if (G.stepT <= 0){
+      G.stepT = p.crouch ? 0.55 : 0.34;
+      if (!p.crouch) p.sprint ? SFX.stepLoud() : SFX.step();
+      if (p.sprint) makeNoise(p.x, p.y, 135);
+      else if (!p.crouch) makeNoise(p.x, p.y, 26);
+    }
+  }
+}
+
+function updateCoin(dt){
+  const c = G.coinProj; if (!c) return;
+  c.t += dt;
+  const blockers = moveBlockers();
+  let hit = false;
+  for (const r of blockers) if (circleRect(c.x + c.vx*dt, c.y + c.vy*dt, 3, r)){ hit = true; break; }
+  if (!hit){ c.x += c.vx*dt; c.y += c.vy*dt; }
+  if (hit || c.t > 0.85){
+    SFX.coin();
+    floater(c.x, c.y-10, 'clink', '#cfd6e4');
+    makeNoise(c.x, c.y, 190);
+    G.coinProj = null;
+  }
+}
+
+function updateChannel(dt){
+  const eHeld = keys.has('e');
+  if (!eHeld || G.player.moving || G.dial){ if (!eHeld) G.channel = null; return; }
+  const t = nearestInteract();
+  if (!t || (t.kind !== 'pick' && t.kind !== 'channel')){ G.channel = null; return; }
+  if (!G.channel || G.channel.kind !== t.kind || G.channel.door !== t.door || G.channel.item !== t.item){
+    G.channel = {kind:t.kind, door:t.door, item:t.item, t:0, dur:t.time, label:t.label};
+  }
+  G.channel.t += dt;
+  if (Math.random() < dt*8) SFX.pick();
+  if (G.channel.t >= G.channel.dur){
+    completeChannel(G.channel);
+    G.channel = null;
+  }
+}
+
+function guardMove(g, tx, ty, speed, dt, blockers){
+  const d = dist(g.x,g.y,tx,ty);
   if (d < 6) return true;
-  const a = Math.atan2(ty - g.y, tx - g.x);
-  g.angle = angLerp(g.angle, a, clamp(dt * 6, 0, 1));
-  collide(g, g.x + Math.cos(a) * spd * dt, g.y + Math.sin(a) * spd * dt);
+  const a = Math.atan2(ty-g.y, tx-g.x);
+  g.ang = a;
+  const ox = g.x, oy = g.y;
+  collideMove(g, Math.cos(a)*speed*dt, Math.sin(a)*speed*dt, blockers);
+  /* guards open unlocked doors they bump into */
+  for (const dr of DOORS){
+    if (!dr.open && !dr.locked && dist(g.x,g.y,dr.x+dr.w/2,dr.y+dr.h/2) < 26){ dr.open = true; SFX.door(); }
+  }
+  const moved = dist(g.x,g.y,ox,oy);
+  if (moved < speed*dt*0.25){ g.stuckT += dt; } else g.stuckT = 0;
   return false;
 }
-function updateGuard(g, dt) {
-  if (g.state === "down") return;
-  const vis = canSee(g.x, g.y, g.angle, 165, 0.56, player.x, player.y) * playerVisibility();
-  if (vis > 0) {
-    g.seeT += dt * (0.55 + vis * 1.5);
-    g.lastX = player.x; g.lastY = player.y;
-    if (g.seeT > 0.55 && g.state !== "chase") {
-      g.state = "chase"; G.seen = true; addAlarm(30);
-      floater(g.x, g.y - 20, "!", "#ef476f"); AudioSys.bad();
-    }
-  } else {
-    g.seeT = Math.max(0, g.seeT - dt * 0.7);
-    if (g.state === "chase" && g.seeT <= 0) { g.state = "search"; g.stateT = 0; g.tx = g.lastX; g.ty = g.lastY; }
-  }
-  g.stateT += dt;
-  if (g.state === "patrol") {
-    const wp = g.path[g.wp];
-    if (guardMove(g, wp[0], wp[1], g.speed, dt)) { g.wp = (g.wp + 1) % g.path.length; g.stateT = 0; }
-    if (g.stateT > 14) { g.wp = (g.wp + 1) % g.path.length; g.stateT = 0; } // stuck failsafe
-  } else if (g.state === "investigate") {
-    if (guardMove(g, g.tx, g.ty, g.speed * 1.35, dt) || g.stateT > 6) { g.state = "search"; g.stateT = 0; }
-  } else if (g.state === "search") {
-    g.angle += Math.sin(G.time * 1.6 + g.x) * dt * 1.8;
-    if (g.stateT > 3.2) { g.state = "patrol"; g.stateT = 0; }
-  } else if (g.state === "chase") {
-    guardMove(g, g.lastX, g.lastY, g.speed * 1.75, dt);
-    if (dist(g.x, g.y, player.x, player.y) < g.r + player.r + 3) { endRun(false, "Caught by a guard"); }
-  }
-  // takedown prompt handled in key handler via proximity check
-}
-function updateCamera(c, dt) {
-  c.angle = c.base + Math.sin(G.time * 0.55 + c.phase) * c.sweep;
-  if (G.camsLooped > 0) return;
-  const vis = canSee(c.x, c.y, c.angle, c.range, c.half, player.x, player.y) * playerVisibility();
-  if (vis > 0) { addAlarm(dt * (26 + vis * 55)); c.hot = 1; } else c.hot = Math.max(0, (c.hot || 0) - dt * 2);
-}
-function updateJanitor(dt) {
-  const j = janitor;
-  if (!j) return;
-  j.stateT += dt;
-  const vis = canSee(j.x, j.y, j.angle, 120, 0.7, player.x, player.y);
-  if (vis > 0 && j.state === "wander") {
-    j.state = "flee"; j.stateT = 0;
-    floater(j.x, j.y - 18, "!!", "#ef476f");
-  }
-  if (j.state === "wander") {
-    if (guardMove(j, j.tx, j.ty, j.speed, dt) || j.stateT > 8) {
-      j.tx = rand(80, 880); j.ty = rand(470, 530); j.stateT = 0;
-    }
-  } else if (j.state === "flee") {
-    // run to the alarm button near the front doors
-    if (guardMove(j, 395, 545, j.speed * 2.1, dt)) { triggerAlarm(); j.state = "hide"; }
-    if (j.stateT > 9) j.state = "hide";
-  } else if (j.state === "hide") {
-    j.angle += dt * 0.8;
-  }
-}
-function updateCoins(dt) {
-  for (let i = coinsThrown.length - 1; i >= 0; i--) {
-    const c = coinsThrown[i];
-    c.t += dt;
-    c.x += c.vx * dt; c.y += c.vy * dt; c.vx *= 0.92; c.vy *= 0.92;
-    if (c.t > 0.55 && !c.landed) { c.landed = true; AudioSys.coin(); makeNoise(c.x, c.y, 150); burst(c.x, c.y, 4, "#ffd166", 30, 0.3); }
-    if (c.t > 3) coinsThrown.splice(i, 1);
-  }
-}
-function inZone(z) { return player.x > z.x && player.x < z.x + z.w && player.y > z.y && player.y < z.y + z.h; }
-function endRun(win, reason) {
-  if (G.mode !== "play") return;
-  G.mode = win ? "win" : "busted";
-  G.endReason = reason || "";
-  AudioSys.sting(win);
-  AudioSys.setLoops(false, 0);
-  if (win) {
-    let score = G.lootValue;
-    if (!G.seen) score += 5000;
-    if (!G.alarmOn) score += 3000;
-    score += Math.max(0, Math.floor((240 - G.time) * 10));
-    G.score = score;
-    G.rank = score >= 26000 ? "S" : score >= 18000 ? "A" : score >= 10000 ? "B" : "C";
-    if (score > G.best) {
-      G.best = score; G.bestRank = G.rank;
-      try { localStorage.setItem("vaultline_best", String(score)); localStorage.setItem("vaultline_rank", G.rank); } catch (e) { /* ignore */ }
-    }
-  }
-}
-function update(dt) {
-  if (G.mode === "title") {
-    G.attractT += dt;
-    for (const g of guards) updateGuardAttract(g, dt);
-    for (const c of cameras) c.angle = c.base + Math.sin(G.attractT * 0.55 + c.phase) * c.sweep;
-    updateParticles(dt);
-    return;
-  }
-  if (G.mode !== "play") { updateParticles(dt); return; }
-  G.time += dt;
-  if (G.banner) { G.banner.t -= dt; if (G.banner.t <= 0) G.banner = null; }
-  if (G.toast) { G.toast.t -= dt; if (G.toast.t <= 0) G.toast = null; }
-  if (G.camsLooped > 0) G.camsLooped -= dt;
-  if (!G.alarmOn) G.alarm = Math.max(0, G.alarm - dt * 1.6);
-  if (G.policeETA > 0) {
-    G.policeETA -= dt;
-    if (G.policeETA <= 0) {
-      G.policeETA = 0; G.policeHere = true;
-      banner("POLICE ON SITE", "Get to a van NOW — 20 seconds to clear out");
-      G.clearT = 20;
-    }
-  }
-  if (G.policeHere) {
-    G.clearT -= dt;
-    if (G.clearT <= 0) { endRun(false, "Police sealed the block"); return; }
-  }
-  updatePlayer(dt);
-  for (const g of guards) updateGuard(g, dt);
-  for (const c of cameras) updateCamera(c, dt);
-  updateJanitor(dt);
-  updateCoins(dt);
-  updateParticles(dt);
-  // vault opening
-  if (vault.state === "opening") {
-    vault.openT += dt;
-    if (Math.random() < dt * 3) AudioSys.drill();
-    makeNoise(vault.x, vault.y, 230);
-    if (vault.openT > 6) {
-      vault.state = "open"; G.vaultOpen = true; AudioSys.clunk(); G.shake = 6;
-      banner("VAULT OPEN", "Grab the loot — mind the weight");
-      if (G.objective < 3) G.objective = 3;
-      if (!G.alarmDisabled && G.policeETA < 0) { G.policeETA = 90; toast("Vault sensor tripped — police ETA 1:30"); }
-    }
-  }
-  // crack mini-game needle
-  if (crack) {
-    crack.needle += crack.dir * crack.speed * dt;
-    if (crack.needle > 1) { crack.needle = 1; crack.dir = -1; }
-    if (crack.needle < 0) { crack.needle = 0; crack.dir = 1; }
-  }
-  // escape
-  if (inZone(vanZone) || inZone(alleyVanZone)) {
-    if (G.lootValue > 0) { endRun(true); return; }
-    else if (G.time > 5 && !G.toast) toast("The van is here — but you're empty-handed. The vault is the job.");
-  }
-  AudioSys.setLoops(G.alarmOn, G.policeETA > 0 ? clamp(1 - G.policeETA / 90, 0, 1) : (G.policeHere ? 1 : 0));
-  G.shake = Math.max(0, G.shake - dt * 14);
-}
-function updateGuardAttract(g, dt) {
-  const wp = g.path[g.wp];
-  if (guardMove(g, wp[0], wp[1], g.speed * 0.8, dt)) g.wp = (g.wp + 1) % g.path.length;
-}
-function updateParticles(dt) {
-  for (let i = particles.length - 1; i >= 0; i--) {
-    const p = particles[i];
-    p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.94; p.vy *= 0.94;
-    if (p.life <= 0) particles.splice(i, 1);
-  }
-  for (let i = floaters.length - 1; i >= 0; i--) {
-    const f = floaters[i]; f.t -= dt; f.y -= dt * 22;
-    if (f.t <= 0) floaters.splice(i, 1);
-  }
-  for (let i = smokeClouds.length - 1; i >= 0; i--) {
-    smokeClouds[i].t -= dt;
-    if (smokeClouds[i].t <= 0) smokeClouds.splice(i, 1);
-  }
-}
-// ----------------------------- rendering -----------------------------
-const floorCanvas = document.createElement("canvas");
-floorCanvas.width = W; floorCanvas.height = H;
-function renderFloor() {
-  const c = floorCanvas.getContext("2d");
-  // base: dark marble
-  c.fillStyle = "#141a26"; c.fillRect(0, 0, W, H);
-  // street (bottom) + alley (top-right outside)
-  c.fillStyle = "#0c0f16"; c.fillRect(0, 560, W, 80);
-  c.strokeStyle = "#3a4358"; c.lineWidth = 2; c.setLineDash([18, 14]);
-  c.beginPath(); c.moveTo(0, 600); c.lineTo(W, 600); c.stroke(); c.setLineDash([]);
-  c.fillStyle = "#0c0f16"; c.fillRect(838, 0, 122, 12);
-  // marble tiles inside
-  c.strokeStyle = "rgba(140,160,200,0.07)"; c.lineWidth = 1;
-  for (let x = 0; x < W; x += 40) { c.beginPath(); c.moveTo(x, 0); c.lineTo(x, 560); c.stroke(); }
-  for (let y = 0; y < 560; y += 40) { c.beginPath(); c.moveTo(0, y); c.lineTo(W, y); c.stroke(); }
-  // red carpet runner in lobby
-  c.fillStyle = "#5e1f2b"; c.fillRect(440, 310, 80, 250);
-  c.strokeStyle = "#c9a227"; c.lineWidth = 2; c.strokeRect(444, 314, 72, 242);
-  // vault room floor: steel plates
-  c.fillStyle = "#1a2233"; c.fillRect(710, 10, 240, 160);
-  c.strokeStyle = "rgba(160,180,220,0.12)";
-  for (let x = 710; x < 950; x += 30) { c.beginPath(); c.moveTo(x, 10); c.lineTo(x, 170); c.stroke(); }
-  for (let y = 10; y < 170; y += 30) { c.beginPath(); c.moveTo(710, y); c.lineTo(950, y); c.stroke(); }
-  // room labels
-  c.fillStyle = "rgba(200,215,245,0.20)"; c.font = "bold 13px Segoe UI, sans-serif"; c.textAlign = "center";
-  c.fillText("VAULT", 830, 162); c.fillText("SECURITY", 610, 132); c.fillText("MANAGER", 120, 150);
-  c.fillText("OFFICE", 330, 150); c.fillText("LOBBY", 480, 540);
-  // bank sign on front wall
-  c.fillStyle = "#c9a227"; c.font = "bold 20px Georgia, serif";
-  c.fillText("M E R I D I A N   B A N K", 480, 548);
-  // furniture
-  for (const f of FURN) drawFurn(c, f);
-  // walls
-  for (const w of WALLS) {
-    c.fillStyle = "#2b3650"; c.fillRect(w.x, w.y, w.w, w.h);
-    c.fillStyle = "#46587e"; c.fillRect(w.x, w.y, w.w, 3);
-    c.strokeStyle = "#10151f"; c.strokeRect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
-  }
-  // lamp light pools
-  const lamps = [[480, 480], [200, 480], [760, 480], [330, 230], [610, 80], [120, 90], [830, 90], [480, 370]];
-  for (const [lx, ly] of lamps) {
-    const gr = c.createRadialGradient(lx, ly, 8, lx, ly, 120);
-    gr.addColorStop(0, "rgba(255,214,130,0.13)"); gr.addColorStop(1, "rgba(255,214,130,0)");
-    c.fillStyle = gr; c.beginPath(); c.arc(lx, ly, 120, 0, TAU); c.fill();
-    c.fillStyle = "#ffd682"; c.beginPath(); c.arc(lx, ly, 3, 0, TAU); c.fill();
-  }
-  // getaway vans
-  drawVan(c, vanZone.x + 6, vanZone.y + 4, "#28418c");
-  drawVan(c, 848, 1, "#28418c");
-}
-function drawVan(c, x, y, color) {
-  c.fillStyle = color; c.fillRect(x, y, 88, 36);
-  c.fillStyle = "#10151f"; c.fillRect(x + 62, y + 5, 20, 26);
-  c.fillStyle = "#dfe7f5"; c.font = "bold 9px Segoe UI"; c.textAlign = "center";
-  c.fillText("GETAWAY", x + 32, y + 22);
-  c.fillStyle = "#0a0d13";
-  c.beginPath(); c.arc(x + 18, y + 36, 7, 0, TAU); c.arc(x + 70, y + 36, 7, 0, TAU); c.fill();
-}
-function drawFurn(c, f) {
-  const { x, y, w, h } = f;
-  switch (f.type) {
-    case "plant":
-      c.fillStyle = "#24351f"; c.fillRect(x, y, w, h);
-      c.fillStyle = "#3f7d3a";
-      for (let i = 0; i < 6; i++) { c.beginPath(); c.arc(x + 5 + (i % 3) * (w - 10) / 2, y + 6 + Math.floor(i / 3) * (h - 12), 6, 0, TAU); c.fill(); }
-      break;
-    case "chairs":
-      c.fillStyle = "#33415e"; c.fillRect(x, y, w, h);
-      c.fillStyle = "#5f7fb8";
-      for (let i = 0; i < 4; i++) c.fillRect(x + 6 + i * (w - 12) / 4, y + 6, (w - 12) / 4 - 4, h - 12);
-      break;
-    case "counter":
-      c.fillStyle = "#4a3b2a"; c.fillRect(x, y, w, h);
-      c.fillStyle = "#8a6d4f"; c.fillRect(x, y, w, 5);
-      c.fillStyle = "rgba(160,220,255,0.25)"; c.fillRect(x, y + 5, w, 4);
-      break;
-    case "desk": case "bigdesk":
-      c.fillStyle = "#5a4632"; c.fillRect(x, y, w, h);
-      c.fillStyle = "#7a6248"; c.fillRect(x + 3, y + 3, w - 6, h - 6);
-      c.fillStyle = "#e8e2d0"; c.fillRect(x + w * 0.3, y + h * 0.3, w * 0.25, h * 0.35);
-      break;
-    case "safe":
-      c.fillStyle = "#39424f"; c.fillRect(x, y, w, h);
-      c.strokeStyle = "#9fb2cc"; c.lineWidth = 2; c.strokeRect(x + 4, y + 4, w - 8, h - 8);
-      c.beginPath(); c.arc(x + w / 2, y + h / 2, 8, 0, TAU); c.stroke();
-      break;
-    case "shelf":
-      c.fillStyle = "#3a2f22"; c.fillRect(x, y, w, h);
-      c.fillStyle = "#c9a227"; for (let i = 0; i < 5; i++) c.fillRect(x + 4 + i * (w - 8) / 5, y + 4, 3, h - 8);
-      break;
-    case "cabinet": case "server":
-      c.fillStyle = "#232b3a"; c.fillRect(x, y, w, h);
-      c.fillStyle = "#38f2a6"; for (let i = 0; i < 4; i++) c.fillRect(x + 4, y + 6 + i * (h - 12) / 4, 4, 3);
-      c.fillStyle = "#ef476f"; c.fillRect(x + w - 8, y + 6, 4, 3);
-      break;
-    case "console":
-      c.fillStyle = "#1d2738"; c.fillRect(x, y, w, h);
-      for (let i = 0; i < 4; i++) {
-        c.fillStyle = "#0e2a3a"; c.fillRect(x + 8 + i * (w - 16) / 4, y + 5, (w - 16) / 4 - 4, h - 14);
-        c.strokeStyle = "#38b6f2"; c.lineWidth = 1; c.strokeRect(x + 8 + i * (w - 16) / 4, y + 5, (w - 16) / 4 - 4, h - 14);
+
+function updateGuards(dt, attract){
+  const blockers = moveBlockers();
+  let anySeen = false;
+  for (const g of G.guards){
+    if (g.down) continue;
+    g.r = 10;
+    let seen = 0;
+    if (!attract){
+      seen = canSee(g.x, g.y, g.ang, 185, 1.05);
+      if (seen > 0){
+        anySeen = true;
+        G.seenEver = true;
+        raiseAlarm((18 + 40*seen) * (G.player.crouch ? 0.55 : 1) * dt);
+        g.state = 'chase'; g.lastX = G.player.x; g.lastY = G.player.y; g.loseT = 0;
       }
-      break;
-    case "loottable":
-      c.fillStyle = "#2a2f3a"; c.fillRect(x, y, w, h);
-      c.strokeStyle = "#c9a227"; c.lineWidth = 1; c.strokeRect(x + 2, y + 2, w - 4, h - 4);
-      break;
-    case "bucket":
-      c.fillStyle = "#b8c4d8"; c.beginPath(); c.arc(x + w / 2, y + h / 2, w / 2 - 2, 0, TAU); c.fill();
-      c.fillStyle = "#6fb7e8"; c.beginPath(); c.arc(x + w / 2, y + h / 2, w / 2 - 7, 0, TAU); c.fill();
-      break;
-    default:
-      c.fillStyle = "#33415e"; c.fillRect(x, y, w, h);
+      /* body discovery */
+      if (!g.bodySeen){
+        for (const o of G.guards){
+          if (o !== g && o.down && dist(g.x,g.y,o.x,o.y) < 150 &&
+              losClear(g.x,g.y,o.x,o.y, sightBlockers(false))){
+            g.bodySeen = true;
+            raiseAlarm(30);
+            floater(o.x, o.y-18, 'MAN DOWN!', '#ff6b6b');
+            g.state = 'investigate'; g.tx = o.x; g.ty = o.y;
+            break;
+          }
+        }
+      }
+      /* chase contact = busted */
+      if (g.state === 'chase' && dist(g.x,g.y,G.player.x,G.player.y) < 19){
+        busted('A guard grabbed you.'); return;
+      }
+    }
+    switch(g.state){
+      case 'patrol': {
+        const wp = g.path[g.wp];
+        if (guardMove(g, wp[0], wp[1], 72, dt, blockers) || g.stuckT > 1.2){
+          g.wp = (g.wp+1) % g.path.length; g.stuckT = 0;
+        }
+        break;
+      }
+      case 'investigate': {
+        if (guardMove(g, g.tx, g.ty, 112, dt, blockers) || g.stuckT > 1.2){
+          g.lookT += dt; g.ang += dt*1.6;
+          if (g.lookT > 2.2){ g.state = 'patrol'; g.lookT = 0; g.stuckT = 0; }
+        }
+        break;
+      }
+      case 'search': {
+        if (guardMove(g, g.lastX, g.lastY, 118, dt, blockers) || g.stuckT > 1.2){
+          g.lookT += dt; g.ang += dt*2.2;
+          if (g.lookT > 4){ g.state = 'patrol'; g.lookT = 0; g.stuckT = 0; }
+        }
+        break;
+      }
+      case 'chase': {
+        if (seen === 0) g.loseT += dt;
+        guardMove(g, g.lastX, g.lastY, 156, dt, blockers);
+        if (g.loseT > 2.5 || g.stuckT > 1.6){ g.state = 'search'; g.lookT = 0; g.stuckT = 0; }
+        break;
+      }
+    }
+  }
+  G.anySeen = anySeen;
+}
+
+function updateCams(dt){
+  let anySeen = G.anySeen || false;
+  for (const c of G.cams){
+    c.ang = c.base + Math.sin(G.time*0.55 + c.phase) * c.sweep;
+    if (G.mode !== 'play') continue;
+    if (G.camsLooped || G.jamT > 0) continue;
+    const seen = canSee(c.x, c.y, c.ang, c.range, c.fov);
+    if (seen > 0){
+      anySeen = true;
+      G.seenEver = true;
+      raiseAlarm((10 + 22*seen) * (G.player.crouch ? 0.55 : 1) * dt);
+    }
+  }
+  G.anySeen = anySeen;
+}
+
+function updateLasers(dt){
+  if (G.lasersOff) return;
+  const p = G.player;
+  for (const l of LASERS){
+    if (l.cool > 0) l.cool -= dt;
+    const active = ((G.time + l.phase) % 3.5) < 2.0;
+    if (active && l.cool <= 0 && segPointDist(l.x1,l.y1,l.x2,l.y2,p.x,p.y) < 9){
+      l.cool = 2.5;
+      SFX.buzz(); raiseAlarm(32);
+      floater(p.x, p.y-22, 'LASER TRIPPED!', '#ff6b6b');
+      G.shake = Math.max(G.shake, 4);
+    }
   }
 }
-function drawCone(x, y, ang, range, half, color, alpha) {
-  const rays = 22;
-  ctx.beginPath(); ctx.moveTo(x, y);
-  for (let i = 0; i <= rays; i++) {
-    const a = ang - half + (2 * half * i) / rays;
-    const d = rayDist(x, y, a, range);
-    ctx.lineTo(x + Math.cos(a) * d, y + Math.sin(a) * d);
+
+function win(){
+  G.mode = 'win';
+  const ghost = G.seenEver ? 0 : 5000;
+  const silent = G.alarmEver ? 0 : 3000;
+  const speed = Math.max(0, Math.round((300 - G.runTime) * 10));
+  G.scoreParts = {loot:G.money, ghost, silent, speed};
+  G.score = G.money + ghost + silent + speed;
+  G.rank = G.score >= 35000 ? 'S' : G.score >= 22000 ? 'A' : G.score >= 10000 ? 'B' : 'C';
+  if (G.score > G.best){ G.best = G.score; saveBest(G.best); }
+  SFX.win();
+}
+function busted(reason){
+  if (G.mode !== 'play') return;
+  G.mode = 'busted'; G.bustReason = reason;
+  SFX.bust();
+}
+
+function objective(){
+  const p = G.player;
+  const inside = p.x > 80 && p.x < 880 && p.y > 70 && p.y < 550;
+  if (!inside) return 'Get inside the Meridian';
+  if (!G.hasKeycard && !G.vaultOpen) return 'Find the keycard — manager\'s office (top-left)';
+  if (!G.vaultOpen) return 'Crack the vault dial (top-right)';
+  if (G.lootCount === 0) return 'Grab the loot';
+  return 'Get to a getaway van!';
+}
+
+/* ---------------- drawing ---------------- */
+function drawCone(ox,oy,ang,range,fov,color,blockers){
+  const rays = 26;
+  ctx.beginPath();
+  ctx.moveTo(ox,oy);
+  for (let i=0;i<=rays;i++){
+    const a = ang - fov/2 + (fov * i/rays);
+    const dx = Math.cos(a), dy = Math.sin(a);
+    let t = range;
+    for (const r of blockers){
+      const hit = rayRect(ox,oy,dx,dy,r);
+      if (hit < t) t = hit;
+    }
+    ctx.lineTo(ox + dx*t, oy + dy*t);
   }
   ctx.closePath();
-  ctx.fillStyle = color; ctx.globalAlpha = alpha; ctx.fill(); ctx.globalAlpha = 1;
+  ctx.fillStyle = color;
+  ctx.fill();
 }
-function drawPerson(x, y, angle, color, skin, r, walkPhase, crouch) {
-  ctx.save(); ctx.translate(x, y); ctx.rotate(angle);
-  // shadow
-  ctx.fillStyle = "rgba(0,0,0,0.35)"; ctx.beginPath(); ctx.ellipse(2, 3, r + 2, r * 0.7, 0, 0, TAU); ctx.fill();
-  // body
-  ctx.fillStyle = color; ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill();
-  ctx.strokeStyle = "rgba(0,0,0,0.4)"; ctx.lineWidth = 1.5; ctx.stroke();
-  // shoulders / direction
-  ctx.fillStyle = shade(color, 0.75);
-  ctx.fillRect(r * 0.3, -r * 0.75, r * 0.55, r * 1.5);
-  // head
-  ctx.fillStyle = skin; ctx.beginPath(); ctx.arc(r * 0.15, 0, r * 0.52, 0, TAU); ctx.fill();
-  if (crouch) { ctx.fillStyle = "rgba(0,0,0,0.25)"; ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill(); }
-  ctx.restore();
-}
-function drawGuard(g) {
-  drawPerson(g.x, g.y, g.angle, g.state === "down" ? "#555" : "#2e4a7a", "#f1c27d", g.r, 0, false);
-  // cap
-  ctx.save(); ctx.translate(g.x, g.y); ctx.rotate(g.angle);
-  ctx.fillStyle = "#16283f"; ctx.beginPath(); ctx.arc(1, 0, g.r * 0.55, 0, TAU); ctx.fill();
-  ctx.fillRect(g.r * 0.4, -g.r * 0.5, g.r * 0.5, g.r);
-  ctx.restore();
-  if (g.state === "down") {
-    ctx.fillStyle = "#dfe7f5"; ctx.font = "bold 10px Segoe UI"; ctx.textAlign = "center";
-    ctx.fillText("Z z", g.x, g.y - 14);
-  } else if (g.seeT > 0.12 && g.state !== "chase") {
-    ctx.fillStyle = "#ffd166"; ctx.font = "bold 15px Segoe UI"; ctx.textAlign = "center";
-    ctx.fillText("?", g.x, g.y - 16);
-  }
-}
-function drawCamera(c) {
-  ctx.save(); ctx.translate(c.x, c.y);
-  ctx.fillStyle = "#9fb2cc"; ctx.fillRect(-7, -5, 14, 10);
-  ctx.rotate(c.angle);
-  ctx.fillStyle = G.camsLooped > 0 ? "#555" : (c.hot > 0.1 ? "#ef476f" : "#ffd166");
-  ctx.beginPath(); ctx.arc(6, 0, 3, 0, TAU); ctx.fill();
-  ctx.restore();
-}
-function drawLootItem(l) {
-  if (l.taken) return;
-  const bob = Math.sin(G.time * 3 + l.x) * 1.5;
-  ctx.save(); ctx.translate(l.x, l.y + bob);
-  if (l.type === "gold") {
-    ctx.fillStyle = "#ffd700"; ctx.fillRect(-11, -4, 22, 8);
-    ctx.fillStyle = "#fff3a0"; ctx.fillRect(-11, -4, 22, 3);
-    ctx.fillStyle = "#e6b800"; ctx.fillRect(-8, -10, 16, 7);
-  } else if (l.type === "cash") {
-    ctx.fillStyle = "#2e7d4f"; ctx.fillRect(-11, -6, 22, 12);
-    ctx.fillStyle = "#d8f3dc"; ctx.fillRect(-4, -6, 8, 12);
-    ctx.fillStyle = "#1b4332"; ctx.font = "bold 8px Segoe UI"; ctx.textAlign = "center"; ctx.fillText("$", 0, 3);
-  } else {
-    ctx.fillStyle = "#7b2d8b"; ctx.fillRect(-9, -7, 18, 14);
-    ctx.fillStyle = "#e0aaff"; ctx.beginPath(); ctx.moveTo(0, -5); ctx.lineTo(5, 0); ctx.lineTo(0, 5); ctx.lineTo(-5, 0); ctx.closePath(); ctx.fill();
-  }
-  ctx.restore();
-}
-function drawVault() {
-  const { x, y, r } = vault;
-  ctx.save(); ctx.translate(x, y);
-  // frame
-  ctx.fillStyle = "#39424f"; ctx.beginPath(); ctx.arc(0, 0, r + 8, 0, TAU); ctx.fill();
-  ctx.strokeStyle = "#9fb2cc"; ctx.lineWidth = 2; ctx.stroke();
-  if (vault.state === "open") {
-    // dark opening with glow
-    const gr = ctx.createRadialGradient(0, 0, 4, 0, 0, r);
-    gr.addColorStop(0, "#3a2f10"); gr.addColorStop(1, "#0a0d13");
-    ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill();
-    // door swung aside
-    ctx.fillStyle = "#4a5568"; ctx.beginPath(); ctx.arc(-r - 10, 6, r * 0.92, 0, TAU); ctx.fill();
-    ctx.strokeStyle = "#c9a227"; ctx.stroke();
-  } else {
-    const openFrac = vault.state === "opening" ? clamp(vault.openT / 6, 0, 1) : 0;
-    ctx.fillStyle = "#4a5568"; ctx.beginPath(); ctx.arc(-openFrac * (r + 10), openFrac * 6, r, 0, TAU); ctx.fill();
-    ctx.strokeStyle = "#c9a227"; ctx.lineWidth = 2; ctx.stroke();
-    // spokes + dial
-    ctx.strokeStyle = "#c9a227";
-    for (let i = 0; i < 4; i++) {
-      const a = i * Math.PI / 2 + (crack ? crack.needle * TAU : 0.4);
-      ctx.beginPath(); ctx.moveTo(-openFrac * (r + 10), openFrac * 6);
-      ctx.lineTo(-openFrac * (r + 10) + Math.cos(a) * r * 0.8, openFrac * 6 + Math.sin(a) * r * 0.8); ctx.stroke();
-    }
-    ctx.fillStyle = "#ffd166"; ctx.beginPath(); ctx.arc(-openFrac * (r + 10), openFrac * 6, 6, 0, TAU); ctx.fill();
-  }
-  ctx.restore();
-  if (vault.state !== "open") {
-    ctx.fillStyle = "#ffd166"; ctx.font = "bold 10px Segoe UI"; ctx.textAlign = "center";
-    ctx.fillText("VAULT", x, y - r - 14);
-  }
-}
-function drawWorld() {
-  ctx.drawImage(floorCanvas, 0, 0);
-  // lasers
-  if (G.lasersOn) {
-    for (const L of lasers) {
-      const on = Math.sin(G.time * 1.4 + L.phase) > -0.25;
-      ctx.strokeStyle = on ? "rgba(255,40,60,0.9)" : "rgba(255,40,60,0.15)";
-      ctx.lineWidth = on ? 2 : 1;
-      ctx.beginPath(); ctx.moveTo(L.x1, L.y1); ctx.lineTo(L.x2, L.y2); ctx.stroke();
-      ctx.fillStyle = "#ef476f";
-      ctx.fillRect(L.x1 - 3, L.y1 - 3, 6, 6); ctx.fillRect(L.x2 - 3, L.y2 - 3, 6, 6);
+
+function drawBank(){
+  /* street & outside */
+  ctx.fillStyle = '#11141d'; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = '#1a1f2b'; ctx.fillRect(0,550,W,90);
+  ctx.fillStyle = '#232a3a'; ctx.fillRect(0,550,W,8);
+  ctx.fillStyle = '#c9a227';
+  for (let x=20;x<W;x+=70) ctx.fillRect(x,592,38,4);
+  /* room floors */
+  const floor = (x,y,w,h,c)=>{ ctx.fillStyle=c; ctx.fillRect(x,y,w,h); };
+  floor(80,70,190,140,'#2b3350');    /* manager office */
+  floor(280,70,190,140,'#2b3350');   /* office */
+  floor(470,70,190,140,'#26304a');   /* security */
+  floor(660,70,220,190,'#3a3220');   /* vault */
+  floor(660,260,220,290,'#222838');  /* corridor */
+  floor(80,210,130,150,'#262b3a');   /* janitor */
+  floor(80,360,200,190,'#2b3350');   /* break room */
+  floor(280,390,390,160,'#39415a');  /* lobby */
+  floor(210,210,450,170,'#2e364e');  /* hallway */
+  /* lobby checker sheen */
+  ctx.fillStyle = 'rgba(255,255,255,0.04)';
+  for (let x=280;x<670;x+=40) for (let y=390;y<550;y+=40) if (((x+y)/40)%2===0) ctx.fillRect(x,y,40,40);
+  /* red carpet */
+  ctx.fillStyle = '#8e1f2f'; ctx.fillRect(452,390,56,160);
+  ctx.fillStyle = '#a8263a'; ctx.fillRect(458,390,44,160);
+  /* room labels */
+  ctx.fillStyle = 'rgba(255,255,255,0.28)';
+  ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('MANAGER', 175, 96);
+  ctx.fillText('OFFICE', 375, 96);
+  ctx.fillText('SECURITY', 565, 96);
+  ctx.fillText('VAULT', 770, 96);
+  ctx.fillText('JANITOR', 145, 240);
+  ctx.fillText('BREAK ROOM', 180, 382);
+  ctx.fillText('MERIDIAN BANK', 480, 408);
+  ctx.fillText('LASER CORRIDOR', 770, 282);
+  /* furniture */
+  for (const f of FURN){
+    ctx.fillStyle = f.tall ? '#4a3b28' : '#5a4632';
+    ctx.fillRect(f.x,f.y,f.w,f.h);
+    ctx.fillStyle = f.tall ? '#6b563a' : '#77603f';
+    ctx.fillRect(f.x,f.y,f.w,4);
+    if (f.kind === 'console'){
+      ctx.fillStyle = G.camsLooped ? '#3aff7a' : '#3aa0ff';
+      for (let i=0;i<4;i++) ctx.fillRect(f.x+8+i*28, f.y+8, 20, 10);
     }
   }
-  // doors
-  for (const d of DOORS) {
-    if (d.open) continue;
-    ctx.fillStyle = d.locked ? "#7a3b2e" : "#5a4632";
-    ctx.fillRect(d.x, d.y, d.w, d.h);
-    ctx.strokeStyle = "#2a2016"; ctx.strokeRect(d.x + 0.5, d.y + 0.5, d.w - 1, d.h - 1);
-    if (d.locked) { ctx.fillStyle = "#ffd166"; ctx.beginPath(); ctx.arc(d.x + d.w / 2, d.y + d.h / 2, 3, 0, TAU); ctx.fill(); }
+  /* interactables */
+  const it = INTERACT.find(i=>i.id==='keycard');
+  if (!it.done){
+    ctx.fillStyle = '#ffd94d'; ctx.fillRect(it.x-9,it.y-6,18,12);
+    ctx.fillStyle = '#7a5c00'; ctx.fillRect(it.x-9,it.y-2,18,3);
   }
-  // loot
-  for (const l of loot) drawLootItem(l);
-  drawVault();
-  // keycard sparkle
-  const kc = interactables.find(i => i.id === "keycard");
-  if (kc && !kc.done) {
-    ctx.fillStyle = "#8ecae6"; ctx.fillRect(kc.x - 7, kc.y - 4, 14, 9);
-    ctx.fillStyle = "#fff"; ctx.font = "bold 7px Segoe UI"; ctx.textAlign = "center"; ctx.fillText("KEY", kc.x, kc.y + 3);
+  const panel = INTERACT.find(i=>i.id==='alarmPanel');
+  ctx.fillStyle = G.alarmOn ? '#ff4040' : '#39415a';
+  ctx.fillRect(panel.x-8, panel.y-10, 16, 20);
+  ctx.fillStyle = '#ffd94d'; ctx.fillRect(panel.x-3, panel.y-4, 6, 6);
+  const sw = INTERACT.find(i=>i.id==='laserSwitch');
+  ctx.fillStyle = G.lasersOff ? '#3aff7a' : '#ff4040';
+  ctx.fillRect(sw.x-7, sw.y-7, 14, 14);
+  /* lasers */
+  for (const l of LASERS){
+    ctx.fillStyle = '#222'; ctx.fillRect(l.x1-4,l.y1-5,8,10); ctx.fillRect(l.x2-4,l.y2-5,8,10);
+    if (G.lasersOff) continue;
+    const active = ((G.time + l.phase) % 3.5) < 2.0;
+    ctx.strokeStyle = active ? 'rgba(255,40,40,0.95)' : 'rgba(255,40,40,0.18)';
+    ctx.lineWidth = active ? 2.5 : 1;
+    ctx.setLineDash(active ? [] : [4,5]);
+    ctx.beginPath(); ctx.moveTo(l.x1,l.y1); ctx.lineTo(l.x2,l.y2); ctx.stroke();
+    ctx.setLineDash([]);
   }
-  // vision cones (under entities)
-  for (const c of cameras) {
-    if (G.camsLooped > 0) continue;
-    drawCone(c.x, c.y, c.angle, c.range, c.half, c.hot > 0.1 ? "#ff3355" : "#ffd166", c.hot > 0.1 ? 0.30 : 0.16);
+  /* loot */
+  for (const l of LOOT){
+    if (l.taken) continue;
+    if (l.kind === 'gold'){
+      ctx.fillStyle = '#e8b91f'; ctx.fillRect(l.x-10,l.y-6,20,12);
+      ctx.fillStyle = '#ffe27a'; ctx.fillRect(l.x-10,l.y-6,20,4);
+    } else if (l.kind === 'cash'){
+      ctx.fillStyle = '#2f9e5f'; ctx.fillRect(l.x-10,l.y-6,20,12);
+      ctx.fillStyle = '#bff5d2'; ctx.font = 'bold 10px system-ui'; ctx.textAlign='center';
+      ctx.fillText('$', l.x, l.y+4);
+    } else {
+      ctx.fillStyle = '#57e6ff';
+      ctx.beginPath();
+      ctx.moveTo(l.x, l.y-9); ctx.lineTo(l.x+8, l.y); ctx.lineTo(l.x, l.y+9); ctx.lineTo(l.x-8, l.y);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#d9fbff'; ctx.fillRect(l.x-2,l.y-3,4,4);
+    }
   }
-  for (const g of guards) {
-    if (g.state === "down") continue;
-    drawCone(g.x, g.y, g.angle, 165, 0.56, g.state === "chase" ? "#ff3355" : "#fff3b0", g.state === "chase" ? 0.30 : 0.15);
+  /* walls */
+  ctx.fillStyle = '#0d1017';
+  for (const w of WALLS) ctx.fillRect(w.x-2,w.y-2,w.w+4,w.h+4);
+  ctx.fillStyle = '#59637c';
+  for (const w of WALLS) ctx.fillRect(w.x,w.y,w.w,w.h);
+  /* doors */
+  for (const d of DOORS){
+    if (d.open){
+      ctx.fillStyle = 'rgba(120,90,50,0.55)';
+      if (d.w > d.h) ctx.fillRect(d.x, d.y-8, 8, 26); else ctx.fillRect(d.x-8, d.y, 26, 8);
+    } else {
+      ctx.fillStyle = d.locked ? '#7a4a1f' : '#8a5a2b';
+      ctx.fillRect(d.x,d.y,d.w,d.h);
+      ctx.fillStyle = '#ffd94d';
+      const cx = d.x+d.w/2, cy = d.y+d.h/2;
+      ctx.fillRect(cx-2,cy-2,4,4);
+      if (d.locked){ ctx.fillStyle='#ff6b6b'; ctx.font='9px system-ui'; ctx.textAlign='center'; ctx.fillText('LOCKED', cx, cy-8); }
+    }
   }
-  // smoke
-  for (const s of smokeClouds) {
-    ctx.fillStyle = "rgba(200,205,220,0.35)";
-    ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, TAU); ctx.fill();
-  }
-  // coins
-  for (const c of coinsThrown) {
-    ctx.fillStyle = "#ffd700"; ctx.beginPath(); ctx.arc(c.x, c.y, 3.5, 0, TAU); ctx.fill();
-  }
-  // janitor + guards + cameras + player
-  if (janitor) drawPerson(janitor.x, janitor.y, janitor.angle, "#5b8c5a", "#e0ac69", janitor.r, 0, false);
-  for (const g of guards) drawGuard(g);
-  for (const c of cameras) drawCamera(c);
-  // player (thief: dark hoodie + mask)
-  drawPerson(player.x, player.y, player.angle, "#1f2430", "#c9a227", player.r, player.walkPhase, player.crouch);
-  ctx.save(); ctx.translate(player.x, player.y); ctx.rotate(player.angle);
-  ctx.fillStyle = "#0d0f14"; ctx.beginPath(); ctx.arc(1, 0, player.r * 0.55, 0, TAU); ctx.fill(); // hood
-  ctx.fillStyle = "#ffd166"; ctx.fillRect(player.r * 0.35, -2, 4, 4); // mask glint
-  ctx.restore();
-  if (G.lootWeight > 0) { // duffel on back
-    ctx.fillStyle = "#28418c"; ctx.beginPath();
-    ctx.arc(player.x - Math.cos(player.angle) * 9, player.y - Math.sin(player.angle) * 9, 6, 0, TAU); ctx.fill();
-  }
-  // particles + floaters
-  for (const p of particles) {
-    ctx.globalAlpha = clamp(p.life / p.maxLife, 0, 1);
-    ctx.fillStyle = p.color; ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
-  }
-  ctx.globalAlpha = 1;
-  ctx.font = "bold 13px Segoe UI"; ctx.textAlign = "center";
-  for (const f of floaters) {
-    ctx.globalAlpha = clamp(f.t, 0, 1);
-    ctx.fillStyle = f.color; ctx.fillText(f.text, f.x, f.y);
-  }
-  ctx.globalAlpha = 1;
-  // night vignette
-  const vg = ctx.createRadialGradient(W / 2, H / 2, H * 0.42, W / 2, H / 2, H * 0.95);
-  vg.addColorStop(0, "rgba(4,8,20,0)"); vg.addColorStop(1, "rgba(4,8,20,0.38)");
-  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
-  if (G.alarmOn) { // red pulse
-    ctx.fillStyle = "rgba(255,30,50," + (0.05 + 0.04 * Math.sin(G.time * 6)) + ")";
-    ctx.fillRect(0, 0, W, H);
-  }
-}
-function fmtTime(s) { const m = Math.floor(s / 60), ss = Math.floor(s % 60); return m + ":" + String(ss).padStart(2, "0"); }
-function drawHUD() {
-  // top bar
-  ctx.fillStyle = "rgba(8,12,22,0.82)"; ctx.fillRect(0, 0, W, 46);
-  ctx.strokeStyle = "#2b3a5c"; ctx.beginPath(); ctx.moveTo(0, 46.5); ctx.lineTo(W, 46.5); ctx.stroke();
-  ctx.textAlign = "left"; ctx.font = "bold 15px Segoe UI";
-  ctx.fillStyle = "#ffd166"; ctx.fillText("$" + G.lootValue.toLocaleString(), 14, 20);
-  ctx.font = "11px Segoe UI"; ctx.fillStyle = "#9fb2cc";
-  ctx.fillText("LOOT  " + G.lootWeight + "/" + G.maxWeight + " kg", 14, 37);
-  // alarm meter
-  ctx.fillStyle = "#dfe7f5"; ctx.font = "bold 11px Segoe UI"; ctx.fillText("ALARM", 200, 16);
-  ctx.fillStyle = "#1c2740"; ctx.fillRect(200, 22, 190, 13);
-  const af = G.alarm / 100;
-  ctx.fillStyle = G.alarmOn ? "#ff3355" : af > 0.66 ? "#ef476f" : af > 0.33 ? "#ffd166" : "#38f2a6";
-  ctx.fillRect(202, 24, 186 * af, 9);
-  ctx.strokeStyle = "#46587e"; ctx.strokeRect(200.5, 22.5, 189, 12);
-  if (G.alarmOn) { ctx.fillStyle = "#ff3355"; ctx.font = "bold 11px Segoe UI"; ctx.fillText("TRIGGERED!", 200, 44); }
-  // objective
-  ctx.fillStyle = "#8ecae6"; ctx.font = "bold 13px Segoe UI"; ctx.textAlign = "center";
-  ctx.fillText("▸ " + OBJECTIVES[G.objective], W / 2 + 60, 20);
-  ctx.font = "11px Segoe UI"; ctx.fillStyle = "#9fb2cc";
-  const hints = [];
-  if (G.hasKeycard) hints.push("KEYCARD");
-  if (G.camsLooped > 0) hints.push("CAMS LOOPED " + Math.ceil(G.camsLooped) + "s");
-  if (!G.lasersOn) hints.push("LASERS OFF");
-  if (G.alarmDisabled) hints.push("ALARM OFF");
-  ctx.fillText(hints.join("   "), W / 2 + 60, 37);
-  // clock + police
-  ctx.textAlign = "right"; ctx.fillStyle = "#dfe7f5"; ctx.font = "bold 15px Segoe UI";
-  ctx.fillText(fmtTime(G.time), W - 14, 20);
-  ctx.font = "11px Segoe UI";
-  if (G.policeHere) { ctx.fillStyle = "#ff3355"; ctx.fillText("POLICE HERE — " + Math.max(0, Math.ceil(G.clearT)) + "s", W - 14, 37); }
-  else if (G.policeETA > 0) { ctx.fillStyle = "#ffd166"; ctx.fillText("POLICE ETA " + fmtTime(G.policeETA), W - 14, 37); }
-  else { ctx.fillStyle = "#38f2a6"; ctx.fillText("NO POLICE", W - 14, 37); }
-  // bottom-left: tools
-  ctx.textAlign = "left"; ctx.font = "11px Segoe UI"; ctx.fillStyle = "#9fb2cc";
-  const tools = ["Coins " + player.coins + " (Q)"];
-  if (player.smoke > 0) tools.push("Smoke " + player.smoke + " (X)");
-  if (hasItem("jammer") && !player.jammerUsed) tools.push("Jammer (J)");
-  if (hasItem("baton")) tools.push("Baton (F)");
-  if (hasItem("picks")) tools.push("Lockpicks");
-  ctx.fillText(tools.join("   ·   "), 14, H - 12);
-  // interact prompt
-  const it = nearestInteractable();
-  if (it && !player.channel) {
-    ctx.font = "bold 13px Segoe UI"; ctx.textAlign = "center";
-    const label = "[E] " + it.label;
-    const tw = ctx.measureText(label).width + 22;
-    ctx.fillStyle = "rgba(8,12,22,0.85)"; ctx.fillRect(W / 2 - tw / 2, H - 44, tw, 24);
-    ctx.strokeStyle = "#c9a227"; ctx.strokeRect(W / 2 - tw / 2 + 0.5, H - 43.5, tw - 1, 23);
-    ctx.fillStyle = "#ffd166"; ctx.fillText(label, W / 2, H - 27);
-  }
-  // channel bar
-  if (player.channel) {
-    const ch = player.channel, f = clamp(ch.t / ch.dur, 0, 1);
-    ctx.fillStyle = "rgba(8,12,22,0.85)"; ctx.fillRect(W / 2 - 110, H - 48, 220, 30);
-    ctx.fillStyle = "#38f2a6"; ctx.fillRect(W / 2 - 104, H - 28, 208 * f, 8);
-    ctx.strokeStyle = "#46587e"; ctx.strokeRect(W / 2 - 104.5, H - 28.5, 209, 9);
-    ctx.fillStyle = "#dfe7f5"; ctx.font = "bold 11px Segoe UI"; ctx.textAlign = "center";
-    ctx.fillText(ch.label, W / 2, H - 34);
-  }
-  // banner + toast
-  if (G.banner) {
-    ctx.globalAlpha = clamp(G.banner.t, 0, 1);
-    ctx.fillStyle = "rgba(8,12,22,0.8)"; ctx.fillRect(W / 2 - 240, 70, 480, 58);
-    ctx.strokeStyle = "#c9a227"; ctx.strokeRect(W / 2 - 239.5, 70.5, 479, 57);
-    ctx.fillStyle = "#ffd166"; ctx.font = "bold 22px Georgia, serif"; ctx.textAlign = "center";
-    ctx.fillText(G.banner.title, W / 2, 98);
-    ctx.fillStyle = "#dfe7f5"; ctx.font = "13px Segoe UI"; ctx.fillText(G.banner.sub, W / 2, 118);
-    ctx.globalAlpha = 1;
-  }
-  if (G.toast) {
-    ctx.globalAlpha = clamp(G.toast.t, 0, 1);
-    ctx.font = "bold 13px Segoe UI"; ctx.textAlign = "center";
-    const tw = ctx.measureText(G.toast.text).width + 24;
-    ctx.fillStyle = "rgba(8,12,22,0.85)"; ctx.fillRect(W / 2 - tw / 2, 136, tw, 24);
-    ctx.fillStyle = "#dfe7f5"; ctx.fillText(G.toast.text, W / 2, 152);
-    ctx.globalAlpha = 1;
-  }
-  // crack mini-game overlay
-  if (crack) {
-    ctx.fillStyle = "rgba(8,12,22,0.9)"; ctx.fillRect(W / 2 - 190, H - 150, 380, 96);
-    ctx.strokeStyle = "#c9a227"; ctx.lineWidth = 2; ctx.strokeRect(W / 2 - 189, H - 149, 378, 94);
-    ctx.fillStyle = "#ffd166"; ctx.font = "bold 14px Segoe UI"; ctx.textAlign = "center";
-    ctx.fillText("VAULT DIAL — tumbler " + (crack.tumblers + 1) + " / 3", W / 2, H - 124);
-    // track
-    const tx = W / 2 - 160, tw = 320, ty = H - 104;
-    ctx.fillStyle = "#1c2740"; ctx.fillRect(tx, ty, tw, 16);
-    ctx.fillStyle = "#38f2a6"; ctx.fillRect(tx + (crack.zoneC - crack.zoneW / 2) * tw, ty, crack.zoneW * tw, 16);
-    ctx.fillStyle = "#fff"; ctx.fillRect(tx + crack.needle * tw - 2, ty - 4, 4, 24);
-    ctx.strokeStyle = "#46587e"; ctx.lineWidth = 1; ctx.strokeRect(tx + 0.5, ty + 0.5, tw - 1, 15);
-    ctx.fillStyle = "#9fb2cc"; ctx.font = "11px Segoe UI";
-    ctx.fillText("SPACE / CLICK when the needle is in the green", W / 2, H - 66);
-  }
-}
-// ----------------------------- screens -----------------------------
-function drawTitle() {
-  drawWorld();
-  ctx.fillStyle = "rgba(4,8,20,0.55)"; ctx.fillRect(0, 0, W, H);
-  ctx.textAlign = "center";
-  ctx.fillStyle = "#c9a227"; ctx.font = "bold 17px Georgia, serif";
-  ctx.fillText("M E R I D I A N   B A N K   ·   2 : 4 7   A M", W / 2, 150);
-  ctx.fillStyle = "#ffd166"; ctx.font = "bold 84px Georgia, serif";
-  ctx.shadowColor = "rgba(255,209,102,0.45)"; ctx.shadowBlur = 26;
-  ctx.fillText("VAULTLINE", W / 2, 232);
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = "#dfe7f5"; ctx.font = "italic 20px Georgia, serif";
-  ctx.fillText("Night at the Meridian", W / 2, 266);
-  ctx.font = "14px Segoe UI"; ctx.fillStyle = "#9fb2cc";
-  ctx.fillText("Case the bank. Beat the cameras. Crack the vault. Vanish before the sirens.", W / 2, 302);
-  const pulse = 0.65 + 0.35 * Math.sin(G.attractT * 3);
-  ctx.globalAlpha = pulse; ctx.fillStyle = "#ffd166"; ctx.font = "bold 20px Segoe UI";
-  ctx.fillText("PRESS ENTER TO PLAN THE JOB", W / 2, 372);
-  ctx.globalAlpha = 1;
-  ctx.font = "13px Segoe UI"; ctx.fillStyle = "#9fb2cc";
-  ctx.fillText("WASD move · Shift sprint (loud) · C crouch · E interact · Q throw coin · F takedown · X smoke · J jammer", W / 2, 420);
-  ctx.fillText("Stay out of the cones. The alarm meter is your life. Loot is heavy — choose well.", W / 2, 442);
-  if (G.best > 0) {
-    ctx.fillStyle = "#ffd166"; ctx.font = "bold 14px Segoe UI";
-    ctx.fillText("BEST SCORE: $" + G.best.toLocaleString() + "  (Rank " + G.bestRank + ")", W / 2, 486);
-  }
-}
-const planButtons = []; // {x,y,w,h,action}
-function drawPlan() {
-  // blueprint background
-  ctx.fillStyle = "#0a1a33"; ctx.fillRect(0, 0, W, H);
-  ctx.strokeStyle = "rgba(120,170,255,0.10)"; ctx.lineWidth = 1;
-  for (let x = 0; x < W; x += 24) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-  for (let y = 0; y < H; y += 24) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
-  planButtons.length = 0;
-  ctx.textAlign = "center";
-  ctx.fillStyle = "#ffd166"; ctx.font = "bold 30px Georgia, serif";
-  ctx.fillText("THE PLAN — MERIDIAN BANK, 2:47 AM", W / 2, 42);
-  // floor plan (scaled 0.62, offset)
-  const s = 0.62, ox = 40, oy = 64;
-  ctx.save(); ctx.translate(ox, oy); ctx.scale(s, s);
-  ctx.fillStyle = "rgba(30,60,110,0.5)"; ctx.fillRect(0, 0, W, 560);
-  ctx.strokeStyle = "#8ecae6"; ctx.lineWidth = 2;
-  for (const w of WALLS) ctx.strokeRect(w.x, w.y, w.w, w.h);
-  // guard patrols (dashed)
-  ctx.setLineDash([8, 7]); ctx.strokeStyle = "#ffd166"; ctx.lineWidth = 2;
-  for (const g of guards) {
+  /* vault door */
+  const vd = VAULT_DOOR;
+  if (!G.vaultOpen){
+    ctx.fillStyle = '#6e7686'; ctx.fillRect(vd.x, vd.y, vd.w, vd.h);
+    const cx = vd.x+vd.w/2, cy = vd.y+vd.h/2;
+    ctx.fillStyle = '#454c5c';
+    ctx.beginPath(); ctx.arc(cx, cy, 16, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#ffd94d'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cx, cy, 16, 0, Math.PI*2); ctx.stroke();
     ctx.beginPath();
-    g.path.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+    for (let i=0;i<4;i++){
+      const a = i*Math.PI/2 + 0.4;
+      ctx.moveTo(cx,cy); ctx.lineTo(cx+Math.cos(a)*14, cy+Math.sin(a)*14);
+    }
+    ctx.stroke();
+    if (G.vaultSwing > 0){
+      ctx.fillStyle = '#ffd94d'; ctx.font = 'bold 11px system-ui'; ctx.textAlign='center';
+      ctx.fillText('OPENING… ' + Math.ceil(G.vaultSwing) + 's', cx, cy-26);
+    }
+  } else {
+    ctx.fillStyle = 'rgba(110,118,134,0.7)';
+    ctx.fillRect(vd.x-26, vd.y-4, 24, 18);
+  }
+  /* vans */
+  for (const v of VANS){
+    ctx.fillStyle = '#20242e'; ctx.fillRect(v.x-3,v.y-3,v.w+6,v.h+6);
+    ctx.fillStyle = '#3d4b63'; ctx.fillRect(v.x,v.y,v.w,v.h);
+    ctx.fillStyle = '#5a6d8f'; ctx.fillRect(v.x+6,v.y+5,v.w-34,10);
+    ctx.fillStyle = '#ffd94d'; ctx.font = 'bold 11px system-ui'; ctx.textAlign='center';
+    ctx.fillText(v.label, v.x+v.w/2, v.y+v.h-8);
+    ctx.fillStyle = '#0d1017';
+    ctx.beginPath(); ctx.arc(v.x+16,v.y+v.h-2,6,0,Math.PI*2); ctx.arc(v.x+v.w-16,v.y+v.h-2,6,0,Math.PI*2); ctx.fill();
+  }
+}
+
+function drawEntities(attract){
+  const blockers = sightBlockers(G.player.crouch);
+  /* camera cones */
+  for (const c of G.cams){
+    const off = G.camsLooped || G.jamT > 0;
+    if (!off) drawCone(c.x,c.y,c.ang,c.range,c.fov,'rgba(255,210,80,0.13)', blockers);
+    ctx.fillStyle = off ? '#555' : '#d8d8d8';
+    ctx.fillRect(c.x-5,c.y-5,10,10);
+    ctx.fillStyle = off ? '#888' : '#ff4040';
+    ctx.beginPath(); ctx.arc(c.x,c.y,2.5,0,Math.PI*2); ctx.fill();
+  }
+  /* guard cones */
+  for (const g of G.guards){
+    if (g.down) continue;
+    const col = g.state==='chase' ? 'rgba(255,60,60,0.22)'
+              : (g.state==='investigate'||g.state==='search') ? 'rgba(255,150,50,0.18)'
+              : 'rgba(255,220,90,0.15)';
+    drawCone(g.x,g.y,g.ang,185,1.05,col, blockers);
+  }
+  /* smoke */
+  if (G.smokeT > 0){
+    ctx.fillStyle = 'rgba(200,208,224,0.35)';
+    for (let i=0;i<7;i++){
+      const a = i*0.9 + G.time*0.7;
+      ctx.beginPath();
+      ctx.arc(G.smokeX + Math.cos(a)*34, G.smokeY + Math.sin(a)*22, 30 + 8*Math.sin(G.time*2+i), 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+  /* coin projectile */
+  if (G.coinProj){
+    ctx.fillStyle = '#ffd94d';
+    ctx.beginPath(); ctx.arc(G.coinProj.x, G.coinProj.y, 4, 0, Math.PI*2); ctx.fill();
+  }
+  /* guards */
+  for (const g of G.guards){
+    if (g.down){
+      ctx.save(); ctx.translate(g.x,g.y); ctx.rotate(g.ang);
+      ctx.fillStyle = '#2c4a7a'; ctx.fillRect(-13,-6,26,12);
+      ctx.fillStyle = '#e8c39a'; ctx.beginPath(); ctx.arc(15,0,5,0,Math.PI*2); ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = '#9fb4ff'; ctx.font = 'bold 11px system-ui'; ctx.textAlign='center';
+      ctx.fillText('z z', g.x, g.y-14);
+      continue;
+    }
+    ctx.fillStyle = '#2c4a7a';
+    ctx.beginPath(); ctx.arc(g.x,g.y,10,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#1d3357';
+    ctx.beginPath(); ctx.arc(g.x,g.y,6,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#e8c39a';
+    ctx.beginPath(); ctx.arc(g.x+Math.cos(g.ang)*5, g.y+Math.sin(g.ang)*5, 4, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#ffd94d'; ctx.fillRect(g.x-1.5,g.y-1.5,3,3);
+    if (g.state === 'chase'){
+      ctx.fillStyle = '#ff4040'; ctx.font = 'bold 16px system-ui'; ctx.textAlign='center';
+      ctx.fillText('!', g.x, g.y-16);
+    } else if (g.state === 'investigate' || g.state === 'search'){
+      ctx.fillStyle = '#ffb347'; ctx.font = 'bold 14px system-ui'; ctx.textAlign='center';
+      ctx.fillText('?', g.x, g.y-16);
+    }
+  }
+  /* thief */
+  if (!attract){
+    const p = G.player;
+    const r = p.crouch ? 8 : 10;
+    ctx.fillStyle = p.crouch ? '#15181f' : '#232833';
+    ctx.beginPath(); ctx.arc(p.x,p.y,r,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#0b0d12';
+    ctx.beginPath(); ctx.arc(p.x,p.y,r*0.6,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#e8c39a';
+    ctx.beginPath(); ctx.arc(p.x+Math.cos(p.ang)*5, p.y+Math.sin(p.ang)*5, 3.5, 0, Math.PI*2); ctx.fill();
+    if (G.weight > 0){
+      ctx.fillStyle = '#6b563a';
+      ctx.beginPath(); ctx.arc(p.x-Math.cos(p.ang)*8, p.y-Math.sin(p.ang)*8, 4 + G.weight/8, 0, Math.PI*2); ctx.fill();
+    }
+    /* interact prompt */
+    const t = nearestInteract();
+    if (t && !G.dial){
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      const label = (t.kind==='pick'||t.kind==='channel') ? 'Hold E — ' + t.label : 'E — ' + t.label;
+      ctx.font = '12px system-ui';
+      const wdt = ctx.measureText(label).width + 16;
+      ctx.fillRect(p.x-wdt/2, p.y-44, wdt, 20);
+      ctx.fillStyle = '#fff'; ctx.textAlign='center';
+      ctx.fillText(label, p.x, p.y-30);
+    }
+    /* channel bar */
+    if (G.channel){
+      const wdt = 90;
+      ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(p.x-wdt/2, p.y-28, wdt, 8);
+      ctx.fillStyle = '#9fe8a9'; ctx.fillRect(p.x-wdt/2, p.y-28, wdt*(G.channel.t/G.channel.dur), 8);
+    }
+  }
+  /* particles & floaters */
+  for (const pt of G.particles){
+    ctx.globalAlpha = 1 - pt.t/pt.life;
+    ctx.fillStyle = pt.color;
+    ctx.fillRect(pt.x-2, pt.y-2, 4, 4);
+  }
+  ctx.globalAlpha = 1;
+  ctx.font = 'bold 13px system-ui'; ctx.textAlign='center';
+  for (const f of G.floaters){
+    ctx.globalAlpha = clamp(1.4 - f.t, 0, 1);
+    ctx.fillStyle = f.color;
+    ctx.fillText(f.text, f.x, f.y);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawHUD(){
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0,0,W,44);
+  ctx.fillStyle = '#ffd94d'; ctx.font = 'bold 20px system-ui';
+  ctx.fillText(fmt$(G.money), 14, 28);
+  ctx.fillStyle = '#fff'; ctx.font = '13px system-ui';
+  ctx.fillText('LOOT ' + G.weight + '/' + G.capacity + ' kg', 14, 40);
+  /* alarm bar */
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 12px system-ui';
+  ctx.fillText('ALARM', 200, 18);
+  ctx.fillStyle = '#333a4d'; ctx.fillRect(200, 22, 180, 12);
+  const frac = G.alarmOn ? 1 : G.alarm/100;
+  ctx.fillStyle = G.alarmOn ? '#ff2020' : (frac > 0.6 ? '#ff8c1a' : '#ffd94d');
+  ctx.fillRect(200, 22, 180*frac, 12);
+  if (G.alarmOn && Math.sin(G.time*8) > 0){
+    ctx.fillStyle = '#ff2020'; ctx.fillText('TRIGGERED', 200, 44);
+  }
+  /* objective */
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#cfe0ff'; ctx.font = 'bold 15px system-ui';
+  ctx.fillText(objective(), W/2+40, 28);
+  /* police timer */
+  ctx.textAlign = 'right';
+  if (G.alarmOn){
+    ctx.fillStyle = G.police < 12 ? '#ff4040' : '#ffb347';
+    ctx.font = 'bold 18px system-ui';
+    ctx.fillText('POLICE ' + Math.ceil(G.police) + 's', W-14, 28);
+  } else {
+    ctx.fillStyle = '#8fa3c8'; ctx.font = 'bold 14px system-ui';
+    ctx.fillText('NO POLICE', W-14, 28);
+  }
+  /* bottom line: tools */
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0,H-26,W,26);
+  ctx.fillStyle = '#dfe7ff'; ctx.font = '13px system-ui';
+  const parts = ['Coins ' + G.coins + ' (Q)'];
+  if (G.loadout.has('baton')) parts.push('Baton (F)');
+  else parts.push('Takedown from behind (F)');
+  if (G.loadout.has('lockpick')) parts.push('Lockpicks');
+  if (G.loadout.has('jammer')) parts.push('Jammer (J)' + (G.jamT>0 ? ' ' + Math.ceil(G.jamT) + 's' : G.jammerUsed ? ' spent' : ''));
+  if (G.loadout.has('smoke')) parts.push('Smoke (X) x' + G.smokeLeft);
+  if (G.hasKeycard) parts.push('KEYCARD');
+  parts.push('Time ' + Math.floor(G.runTime/60) + ':' + String(Math.floor(G.runTime%60)).padStart(2,'0'));
+  ctx.fillText(parts.join(' · '), 14, H-9);
+  /* transient message */
+  if (G.msgT > 0){
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.font = 'bold 15px system-ui';
+    const wdt = ctx.measureText(G.msg).width + 24;
+    ctx.fillRect(W/2-wdt/2, 52, wdt, 26);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(G.msg, W/2, 70);
+  }
+}
+
+function drawDial(){
+  const d = G.dial; if (!d) return;
+  const cx = W/2, cy = H/2, R = 120;
+  ctx.fillStyle = 'rgba(4,6,12,0.72)'; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = '#454c5c';
+  ctx.beginPath(); ctx.arc(cx,cy,R,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#ffd94d'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.arc(cx,cy,R,0,Math.PI*2); ctx.stroke();
+  /* green zone */
+  ctx.strokeStyle = '#3aff7a'; ctx.lineWidth = 16;
+  ctx.beginPath(); ctx.arc(cx,cy,R-14, d.zoneStart, d.zoneStart + d.sizes[d.tumbler]); ctx.stroke();
+  /* ticks */
+  ctx.strokeStyle = '#cfd6e4'; ctx.lineWidth = 2;
+  for (let i=0;i<24;i++){
+    const a = i*Math.PI/12;
+    ctx.beginPath();
+    ctx.moveTo(cx+Math.cos(a)*(R-26), cy+Math.sin(a)*(R-26));
+    ctx.lineTo(cx+Math.cos(a)*(R-34), cy+Math.sin(a)*(R-34));
+    ctx.stroke();
+  }
+  /* needle */
+  ctx.strokeStyle = '#ff4040'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(cx,cy);
+  ctx.lineTo(cx+Math.cos(d.needle)*(R-10), cy+Math.sin(d.needle)*(R-10)); ctx.stroke();
+  ctx.fillStyle = '#ffd94d';
+  ctx.beginPath(); ctx.arc(cx,cy,9,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 20px system-ui'; ctx.textAlign='center';
+  ctx.fillText('TUMBLER ' + (d.tumbler+1) + ' / 3 — SPACE or CLICK in the green', cx, cy+R+36);
+  for (let i=0;i<3;i++){
+    ctx.fillStyle = i < d.tumbler ? '#3aff7a' : '#39415a';
+    ctx.beginPath(); ctx.arc(cx-24+i*24, cy+R+58, 8, 0, Math.PI*2); ctx.fill();
+  }
+}
+
+function drawTitle(){
+  drawBank();
+  drawEntities(true);
+  ctx.fillStyle = 'rgba(4,6,12,0.62)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#000'; ctx.font = 'bold 92px system-ui';
+  ctx.fillText('VAULTLINE', W/2+4, 214);
+  ctx.fillStyle = '#ffd94d';
+  ctx.fillText('VAULTLINE', W/2, 210);
+  ctx.fillStyle = '#cfe0ff'; ctx.font = 'italic 30px system-ui';
+  ctx.fillText('Night at the Meridian', W/2, 256);
+  ctx.fillStyle = '#fff'; ctx.font = '17px system-ui';
+  ctx.fillText('Case the bank. Beat the cameras. Crack the vault. Vanish before the sirens.', W/2, 300);
+  if (Math.sin(G.time*3) > -0.3){
+    ctx.fillStyle = '#ff6b6b'; ctx.font = 'bold 22px system-ui';
+    ctx.fillText('PRESS ENTER TO PLAN THE JOB', W/2, 368);
+  }
+  ctx.fillStyle = '#8fa3c8'; ctx.font = '14px system-ui';
+  ctx.fillText('WASD move · Shift sprint · C crouch · E interact · Q coin · F takedown · X smoke · J jammer · M mute', W/2, 596);
+  if (G.best > 0){
+    ctx.fillStyle = '#ffd94d'; ctx.font = 'bold 16px system-ui';
+    ctx.fillText('Best score: ' + fmt$(G.best), W/2, 404);
+  }
+}
+
+/* plan screen layout */
+const PLAN = {
+  bx:30, by:110, s:0.6,
+  panelX:630, panelW:310,
+  entryY:[150,206,262], entryH:48,
+  loadY:352, loadH:34,
+  start:{x:630,y:545,w:310,h:52},
+};
+function planClick(mx,my){
+  for (let i=0;i<3;i++){
+    if (mx>=PLAN.panelX && mx<=PLAN.panelX+PLAN.panelW && my>=PLAN.entryY[i] && my<=PLAN.entryY[i]+PLAN.entryH){
+      G.entry = i; SFX.click(); return;
+    }
+  }
+  for (let i=0;i<LOADOUT.length;i++){
+    const y = PLAN.loadY + i*PLAN.loadH;
+    if (mx>=PLAN.panelX && mx<=PLAN.panelX+PLAN.panelW && my>=y && my<=y+PLAN.loadH-4){
+      toggleLoadout(LOADOUT[i].id); return;
+    }
+  }
+  const s = PLAN.start;
+  if (mx>=s.x && mx<=s.x+s.w && my>=s.y && my<=s.y+s.h) startJob();
+}
+function drawPlan(){
+  ctx.fillStyle = '#0a1a3a'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#cfe0ff'; ctx.font = 'bold 24px system-ui';
+  ctx.fillText('THE PLAN — MERIDIAN BANK, 2:47 AM', 30, 44);
+  ctx.fillStyle = '#8fa3c8'; ctx.font = '14px system-ui';
+  ctx.fillText('Pick an entry point and 2 tools. Then we move.', 30, 68);
+  /* blueprint */
+  const {bx,by,s} = PLAN;
+  ctx.strokeStyle = '#3d5a99'; ctx.lineWidth = 2;
+  ctx.strokeRect(bx-6, by-6, W*s+12, H*s+12);
+  ctx.fillStyle = '#0d2150'; ctx.fillRect(bx,by,W*s,H*s);
+  const P = (x,y)=>[bx + x*s, by + y*s];
+  ctx.fillStyle = '#7fa8e8';
+  for (const w of WALLS){ const [x,y]=P(w.x,w.y); ctx.fillRect(x,y,w.w*s,w.h*s); }
+  for (const d of DOORS){ const [x,y]=P(d.x,d.y); ctx.fillStyle = d.locked ? '#ff9d5c' : '#7fa8e8'; ctx.fillRect(x,y,d.w*s,d.h*s); }
+  /* patrol routes */
+  ctx.strokeStyle = '#ffd94d'; ctx.setLineDash([5,5]); ctx.lineWidth = 1.5;
+  for (const g of makeGuards()){
+    ctx.beginPath();
+    g.path.forEach((wp,i)=>{ const [x,y]=P(wp[0],wp[1]); i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y); });
     ctx.closePath(); ctx.stroke();
   }
   ctx.setLineDash([]);
-  // camera cones
-  for (const c of cameras) drawCone(c.x, c.y, c.base, c.range, c.half, "#ffd166", 0.20);
-  // vault + keycard + vans
-  ctx.fillStyle = "#ffd700"; ctx.beginPath(); ctx.arc(vault.x, vault.y, 20, 0, TAU); ctx.fill();
-  ctx.fillStyle = "#0a1a33"; ctx.font = "bold 15px Segoe UI"; ctx.fillText("$", vault.x, vault.y + 5);
-  ctx.fillStyle = "#8ecae6"; ctx.fillRect(78, 52, 14, 10);
-  ctx.fillStyle = "#28418c"; ctx.fillRect(vanZone.x, vanZone.y, vanZone.w, vanZone.h);
-  ctx.fillStyle = "#28418c"; ctx.fillRect(alleyVanZone.x, alleyVanZone.y, alleyVanZone.w, alleyVanZone.h);
-  // entry markers
-  ENTRIES.forEach((e, i) => {
-    ctx.fillStyle = G.entry === i ? "#38f2a6" : "#ffd166";
-    ctx.beginPath(); ctx.arc(e.x, e.y, 13, 0, TAU); ctx.fill();
-    ctx.fillStyle = "#0a1a33"; ctx.font = "bold 13px Segoe UI"; ctx.fillText(String(i + 1), e.x, e.y + 4.5);
+  /* camera cones */
+  for (const c of makeCams()){
+    const [x,y]=P(c.x,c.y);
+    ctx.fillStyle = 'rgba(255,210,80,0.25)';
+    ctx.beginPath(); ctx.moveTo(x,y);
+    ctx.arc(x,y,c.range*s, c.base-c.fov/2, c.base+c.fov/2);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.fillRect(x-2,y-2,4,4);
+  }
+  /* vault $ */
+  const [vx,vy] = P(790,160);
+  ctx.fillStyle = '#ffd94d'; ctx.font = 'bold 26px system-ui'; ctx.textAlign='center';
+  ctx.fillText('$', vx, vy);
+  ctx.font = '11px system-ui'; ctx.fillText('VAULT', vx, vy+16);
+  /* lasers */
+  ctx.strokeStyle = '#ff4040'; ctx.lineWidth = 1.5;
+  for (const l of LASERS){ const [x1,y1]=P(l.x1,l.y1), [x2,y2]=P(l.x2,l.y2); ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); }
+  /* vans */
+  ctx.fillStyle = '#9fe8a9'; ctx.font = '10px system-ui';
+  for (const v of VANS){ const [x,y]=P(v.x,v.y); ctx.strokeStyle='#9fe8a9'; ctx.strokeRect(x,y,v.w*s,v.h*s); ctx.fillText('VAN', x+v.w*s/2, y+v.h*s/2+3); }
+  /* entry markers */
+  const marks = [[480,560],[880,290],[170,155]];
+  marks.forEach((m,i)=>{
+    const [x,y]=P(m[0],m[1]);
+    ctx.fillStyle = G.entry===i ? '#ff4040' : '#ffd94d';
+    ctx.beginPath(); ctx.arc(x,y,11,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#0a1a3a'; ctx.font = 'bold 13px system-ui';
+    ctx.fillText(String(i+1), x, y+4);
   });
-  ctx.restore();
-  ctx.fillStyle = "#9fb2cc"; ctx.font = "11px Segoe UI"; ctx.textAlign = "left";
-  ctx.fillText("— walls   - - guard patrols   cones = cameras   $ = vault   blue = vans", ox, oy + 560 * s + 18);
-  // right panel: entry + loadout
-  const px = 660;
-  ctx.fillStyle = "rgba(10,20,40,0.85)"; ctx.fillRect(px - 12, 64, 300, 470);
-  ctx.strokeStyle = "#2b4a7a"; ctx.strokeRect(px - 11.5, 64.5, 299, 469);
-  ctx.fillStyle = "#ffd166"; ctx.font = "bold 15px Segoe UI"; ctx.textAlign = "left";
-  ctx.fillText("ENTRY POINT", px, 92);
-  ENTRIES.forEach((e, i) => {
-    const y = 104 + i * 52;
-    const sel = G.entry === i;
-    ctx.fillStyle = sel ? "#1d3a24" : "#12233f"; ctx.fillRect(px, y, 276, 44);
-    ctx.strokeStyle = sel ? "#38f2a6" : "#2b4a7a"; ctx.strokeRect(px + 0.5, y + 0.5, 275, 43);
-    ctx.fillStyle = sel ? "#38f2a6" : "#dfe7f5"; ctx.font = "bold 13px Segoe UI";
-    ctx.fillText((i + 1) + ". " + e.name, px + 10, y + 18);
-    ctx.font = "10.5px Segoe UI"; ctx.fillStyle = "#9fb2cc";
-    ctx.fillText(e.desc, px + 10, y + 34);
-    planButtons.push({ x: px, y, w: 276, h: 44, action: () => { G.entry = i; AudioSys.click(); } });
+  /* legend */
+  ctx.textAlign = 'left'; ctx.fillStyle = '#8fa3c8'; ctx.font = '12px system-ui';
+  ctx.fillText('— guard patrol   ◣ camera   — laser   ■ locked door', bx, by + H*s + 30);
+
+  /* right panel */
+  const px = PLAN.panelX, pw = PLAN.panelW;
+  ctx.fillStyle = '#cfe0ff'; ctx.font = 'bold 17px system-ui';
+  ctx.fillText('ENTRY POINT', px, 132);
+  ENTRIES.forEach((e,i)=>{
+    const y = PLAN.entryY[i];
+    ctx.fillStyle = G.entry===i ? '#274b8f' : '#12244d';
+    ctx.fillRect(px, y, pw, PLAN.entryH);
+    ctx.strokeStyle = G.entry===i ? '#ffd94d' : '#3d5a99'; ctx.lineWidth = G.entry===i ? 2 : 1;
+    ctx.strokeRect(px, y, pw, PLAN.entryH);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 15px system-ui';
+    ctx.fillText(e.name, px+10, y+19);
+    ctx.fillStyle = '#a9bde0'; ctx.font = '11px system-ui';
+    ctx.fillText(e.desc, px+10, y+37);
   });
-  ctx.fillStyle = "#ffd166"; ctx.font = "bold 15px Segoe UI";
-  ctx.fillText("LOADOUT — pick 2", px, 288);
-  LOADOUT_ITEMS.forEach((it, i) => {
-    const y = 300 + i * 38;
-    const sel = G.loadout[i];
-    ctx.fillStyle = sel ? "#3a2f10" : "#12233f"; ctx.fillRect(px, y, 276, 32);
-    ctx.strokeStyle = sel ? "#ffd166" : "#2b4a7a"; ctx.strokeRect(px + 0.5, y + 0.5, 275, 31);
-    ctx.fillStyle = sel ? "#ffd166" : "#dfe7f5"; ctx.font = "bold 12px Segoe UI";
-    ctx.fillText((sel ? "✓ " : "· ") + it.name, px + 10, y + 14);
-    ctx.font = "10px Segoe UI"; ctx.fillStyle = "#9fb2cc";
-    ctx.fillText(it.desc, px + 10, y + 27);
-    planButtons.push({ x: px, y, w: 276, h: 32, action: () => {
-      if (sel) { G.loadout[i] = false; }
-      else if (G.loadout.filter(Boolean).length >= 2) { toast("Only 2 tools — drop one first"); AudioSys.bad(); return; }
-      else G.loadout[i] = true;
-      AudioSys.click();
-    } });
+  ctx.fillStyle = '#cfe0ff'; ctx.font = 'bold 17px system-ui';
+  ctx.fillText('LOADOUT — pick 2 (' + G.loadout.size + '/2)', px, 338);
+  LOADOUT.forEach((item,i)=>{
+    const y = PLAN.loadY + i*PLAN.loadH;
+    const on = G.loadout.has(item.id);
+    ctx.fillStyle = on ? '#274b8f' : '#12244d';
+    ctx.fillRect(px, y, pw, PLAN.loadH-4);
+    ctx.strokeStyle = on ? '#9fe8a9' : '#3d5a99'; ctx.lineWidth = 1;
+    ctx.strokeRect(px, y, pw, PLAN.loadH-4);
+    ctx.fillStyle = on ? '#9fe8a9' : '#5a6d8f';
+    ctx.fillRect(px+8, y+8, 14, 14);
+    if (on){ ctx.fillStyle = '#0a1a3a'; ctx.font = 'bold 12px system-ui'; ctx.fillText('✓', px+10, y+20); }
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 13px system-ui';
+    ctx.fillText(item.name + '  [' + item.key + ']', px+30, y+15);
+    ctx.fillStyle = '#a9bde0'; ctx.font = '10.5px system-ui';
+    ctx.fillText(item.desc, px+30, y+27);
   });
-  // start button
-  const sy = 548;
-  ctx.fillStyle = "#7a1f2b"; ctx.fillRect(px, sy, 276, 52);
-  ctx.strokeStyle = "#ffd166"; ctx.lineWidth = 2; ctx.strokeRect(px + 1, sy + 1, 274, 50);
-  ctx.fillStyle = "#ffd166"; ctx.font = "bold 20px Georgia, serif"; ctx.textAlign = "center";
-  ctx.fillText("START THE JOB", px + 138, sy + 34);
-  planButtons.push({ x: px, y: sy, w: 276, h: 52, action: () => { resetRun(); G.mode = "play"; banner("THE JOB IS ON", "Objective: " + OBJECTIVES[0]); AudioSys.good(); } });
-  ctx.textAlign = "left"; ctx.font = "11px Segoe UI"; ctx.fillStyle = "#9fb2cc";
-  ctx.fillText("Keys 1-3 entry · Enter start", px, sy + 70);
-  if (G.toast) {
-    ctx.globalAlpha = clamp(G.toast.t, 0, 1);
-    ctx.fillStyle = "#ffd166"; ctx.font = "bold 13px Segoe UI"; ctx.textAlign = "center";
-    ctx.fillText(G.toast.text, W / 2, H - 14);
-    ctx.globalAlpha = 1;
+  /* start button */
+  const st = PLAN.start;
+  ctx.fillStyle = G.loadout.size===2 ? '#c81f2f' : '#5a2430';
+  ctx.fillRect(st.x, st.y, st.w, st.h);
+  ctx.strokeStyle = '#ff8a94'; ctx.lineWidth = 2; ctx.strokeRect(st.x, st.y, st.w, st.h);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 22px system-ui'; ctx.textAlign='center';
+  ctx.fillText('START THE JOB', st.x+st.w/2, st.y+34);
+  ctx.textAlign = 'left';
+  if (G.msgT > 0){
+    ctx.fillStyle = '#ffb347'; ctx.font = 'bold 14px system-ui';
+    ctx.fillText(G.msg, 30, H-18);
   }
 }
-function drawEnd(win) {
-  drawWorld();
-  ctx.fillStyle = win ? "rgba(6,20,12,0.72)" : "rgba(24,6,10,0.72)"; ctx.fillRect(0, 0, W, H);
-  ctx.textAlign = "center";
-  ctx.fillStyle = win ? "#38f2a6" : "#ff3355"; ctx.font = "bold 56px Georgia, serif";
-  ctx.fillText(win ? "CLEAN GETAWAY" : "BUSTED", W / 2, 170);
-  ctx.fillStyle = "#dfe7f5"; ctx.font = "16px Segoe UI";
-  if (win) {
-    let y = 220;
-    const line = (label, val, color) => {
-      ctx.fillStyle = "#9fb2cc"; ctx.textAlign = "right"; ctx.fillText(label, W / 2 - 12, y);
-      ctx.fillStyle = color || "#ffd166"; ctx.textAlign = "left"; ctx.fillText(val, W / 2 + 12, y);
-      y += 26;
-    };
-    line("Loot hauled", "$" + G.lootValue.toLocaleString() + "  (" + G.lootWeight + " kg)");
-    line("Ghost bonus (never seen)", G.seen ? "—" : "+$5,000", G.seen ? "#5a6a86" : "#38f2a6");
-    line("Silent bonus (no alarm)", G.alarmOn ? "—" : "+$3,000", G.alarmOn ? "#5a6a86" : "#38f2a6");
-    line("Speed bonus", "+$" + Math.max(0, Math.floor((240 - G.time) * 10)).toLocaleString());
-    line("Time", fmtTime(G.time), "#dfe7f5");
-    y += 8;
-    ctx.textAlign = "center"; ctx.fillStyle = "#ffd166"; ctx.font = "bold 26px Segoe UI";
-    ctx.fillText("SCORE $" + (G.score || 0).toLocaleString(), W / 2, y);
-    ctx.font = "bold 40px Georgia, serif"; ctx.fillStyle = "#ffd700";
-    ctx.fillText("RANK " + G.rank, W / 2, y + 48);
+
+function drawEnd(){
+  drawBank();
+  drawEntities(false);
+  ctx.fillStyle = 'rgba(4,6,12,0.78)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign = 'center';
+  if (G.mode === 'win'){
+    ctx.fillStyle = '#ffd94d'; ctx.font = 'bold 64px system-ui';
+    ctx.fillText('CLEAN GETAWAY', W/2, 170);
+    ctx.fillStyle = '#fff'; ctx.font = '19px system-ui';
+    const p = G.scoreParts || {loot:0,ghost:0,silent:0,speed:0};
+    ctx.fillText('Loot hauled: ' + fmt$(p.loot), W/2, 230);
+    ctx.fillText('Ghost bonus (never seen): ' + fmt$(p.ghost), W/2, 262);
+    ctx.fillText('Silent bonus (no alarm): ' + fmt$(p.silent), W/2, 294);
+    ctx.fillText('Speed bonus: ' + fmt$(p.speed), W/2, 326);
+    ctx.font = 'bold 26px system-ui'; ctx.fillStyle = '#ffd94d';
+    ctx.fillText('SCORE ' + fmt$(G.score), W/2, 376);
+    ctx.font = 'bold 80px system-ui';
+    ctx.fillStyle = G.rank==='S' ? '#ffd94d' : G.rank==='A' ? '#9fe8a9' : '#cfe0ff';
+    ctx.fillText(G.rank, W/2, 466);
+    ctx.font = '16px system-ui'; ctx.fillStyle = '#8fa3c8';
+    ctx.fillText('Best score: ' + fmt$(G.best), W/2, 500);
   } else {
-    ctx.fillText(G.endReason || "The job went sideways.", W / 2, 220);
-    ctx.fillText("Loot lost: $" + G.lootValue.toLocaleString() + " · Survived " + fmtTime(G.time), W / 2, 248);
+    ctx.fillStyle = '#ff4040'; ctx.font = 'bold 72px system-ui';
+    ctx.fillText('BUSTED', W/2, 200);
+    ctx.fillStyle = '#fff'; ctx.font = '20px system-ui';
+    ctx.fillText(G.bustReason, W/2, 250);
+    ctx.font = '16px system-ui'; ctx.fillStyle = '#8fa3c8';
+    ctx.fillText('Loot left behind: ' + fmt$(G.money) + ' · Time: ' + Math.floor(G.runTime/60) + ':' + String(Math.floor(G.runTime%60)).padStart(2,'0'), W/2, 290);
+    ctx.fillText('Best score: ' + fmt$(G.best), W/2, 320);
   }
-  ctx.fillStyle = "#9fb2cc"; ctx.font = "14px Segoe UI";
-  ctx.fillText("ENTER — plan another job        R — retry same plan", W / 2, 470);
-  if (G.best > 0) { ctx.fillStyle = "#ffd166"; ctx.fillText("BEST: $" + G.best.toLocaleString() + " (Rank " + G.bestRank + ")", W / 2, 498); }
-}
-function drawPause() {
-  drawWorld(); drawHUD();
-  ctx.fillStyle = "rgba(4,8,20,0.7)"; ctx.fillRect(0, 0, W, H);
-  ctx.textAlign = "center"; ctx.fillStyle = "#ffd166"; ctx.font = "bold 40px Georgia, serif";
-  ctx.fillText("PAUSED", W / 2, 280);
-  ctx.fillStyle = "#dfe7f5"; ctx.font = "15px Segoe UI";
-  ctx.fillText("P / Esc — resume      R — restart job      M — " + (AudioSys.muted ? "unmute" : "mute"), W / 2, 320);
-  ctx.font = "13px Segoe UI"; ctx.fillStyle = "#9fb2cc";
-  ctx.fillText("WASD move · Shift sprint · C crouch · E interact · Q coin · F takedown · X smoke · J jammer", W / 2, 352);
+  ctx.fillStyle = '#ff6b6b'; ctx.font = 'bold 20px system-ui';
+  ctx.fillText('ENTER — back to the plan', W/2, 560);
 }
 
-// ----------------------------- keys -----------------------------
-function onKeyPress(code) {
-  if (code === "KeyM") { AudioSys.muted = !AudioSys.muted; return; }
-  if (G.mode === "title") {
-    if (code === "Enter" || code === "Space") { G.mode = "plan"; AudioSys.click(); }
-    return;
-  }
-  if (G.mode === "plan") {
-    if (code === "Digit1") G.entry = 0;
-    if (code === "Digit2") G.entry = 1;
-    if (code === "Digit3") G.entry = 2;
-    if (code === "Enter") { resetRun(); G.mode = "play"; banner("THE JOB IS ON", "Objective: " + OBJECTIVES[0]); AudioSys.good(); }
-    return;
-  }
-  if (G.mode === "win" || G.mode === "busted") {
-    if (code === "Enter") { G.mode = "plan"; resetRun(); }
-    if (code === "KeyR") { resetRun(); G.mode = "play"; banner("THE JOB IS ON", "Objective: " + OBJECTIVES[0]); }
-    return;
-  }
-  if (G.mode === "pause") {
-    if (code === "KeyP" || code === "Escape") G.mode = "play";
-    if (code === "KeyR") { resetRun(); G.mode = "play"; }
-    return;
-  }
-  // play mode
-  if (code === "KeyP" || code === "Escape") { G.mode = "pause"; AudioSys.setLoops(false, 0); return; }
-  if (crack && (code === "Space")) { crackAttempt(); return; }
-  if (code === "KeyE") doInteract(nearestInteractable());
-  if (code === "KeyQ") {
-    if (player.coins > 0) {
-      player.coins--;
-      const a = Math.atan2(mouse.y - player.y, mouse.x - player.x);
-      coinsThrown.push({ x: player.x, y: player.y, vx: Math.cos(a) * 260, vy: Math.sin(a) * 260, t: 0, landed: false });
-      AudioSys.coin();
-    } else toast("Out of coins");
-  }
-  if (code === "KeyX") {
-    if (player.smoke > 0) {
-      player.smoke--;
-      smokeClouds.push({ x: player.x, y: player.y, r: 74, t: 6 });
-      burst(player.x, player.y, 16, "#c8cddc", 70, 0.7); AudioSys.noise(0.4, 0.2, 1200);
-      for (const g of guards) if (g.state === "chase") { g.state = "search"; g.tx = player.x; g.ty = player.y; g.stateT = 0; g.seeT = 0; }
-    } else toast("No smoke bomb");
-  }
-  if (code === "KeyJ") {
-    if (hasItem("jammer") && !player.jammerUsed) {
-      player.jammerUsed = true; G.camsLooped = 60; AudioSys.zap();
-      banner("JAMMER ACTIVE", "Cameras blind for 60 seconds");
-    } else if (!hasItem("jammer")) toast("No jammer in loadout");
-    else toast("Jammer spent");
-  }
-  if (code === "KeyF") {
-    // takedown: nearest guard within 30px, from behind (or any angle with baton)
-    let best = null, bd = 34;
-    for (const g of guards) {
-      if (g.state === "down") continue;
-      const d = dist(player.x, player.y, g.x, g.y);
-      if (d < bd) { bd = d; best = g; }
-    }
-    if (best) {
-      const behind = Math.abs(angDiff(best.angle, Math.atan2(player.y - best.y, player.x - best.x))) > 1.9;
-      if (behind || hasItem("baton")) {
-        best.state = "down"; AudioSys.thud(); burst(best.x, best.y, 8, "#dfe7f5", 50, 0.5);
-        floater(best.x, best.y - 18, "DOWN", "#8ecae6");
-      } else { toast("He's facing you — get behind him"); AudioSys.bad(); }
-    }
-  }
-  if (code === "KeyR") { resetRun(); banner("THE JOB IS ON", "Objective: " + OBJECTIVES[0]); }
-}
-
-// ----------------------------- main loop -----------------------------
-let lastT = performance.now();
-function frame(now) {
-  requestAnimationFrame(frame);
-  let dt = (now - lastT) / 1000; lastT = now;
-  dt = clamp(dt, 0, 0.05);
-  if (mouse.clicked) {
-    mouse.clicked = false;
-    if (G.mode === "plan") {
-      for (const b of planButtons) {
-        if (mouse.x >= b.x && mouse.x <= b.x + b.w && mouse.y >= b.y && mouse.y <= b.y + b.h) { b.action(); break; }
-      }
-    } else if (G.mode === "play" && crack) crackAttempt();
-    else if (G.mode === "title") { G.mode = "plan"; AudioSys.click(); }
-  }
-  update(dt);
+function draw(){
   ctx.save();
-  if (G.shake > 0) ctx.translate(rand(-G.shake, G.shake), rand(-G.shake, G.shake));
-  if (G.mode === "title") drawTitle();
-  else if (G.mode === "plan") drawPlan();
-  else if (G.mode === "pause") drawPause();
-  else if (G.mode === "win") drawEnd(true);
-  else if (G.mode === "busted") drawEnd(false);
-  else { drawWorld(); drawHUD(); }
+  if (G.shake > 0) ctx.translate(rand(-G.shake,G.shake), rand(-G.shake,G.shake));
+  if (G.mode === 'title') drawTitle();
+  else if (G.mode === 'plan') drawPlan();
+  else if (G.mode === 'win' || G.mode === 'busted') drawEnd();
+  else {
+    drawBank();
+    drawEntities(false);
+    drawHUD();
+    if (G.dial) drawDial();
+    if (G.paused){
+      ctx.fillStyle = 'rgba(4,6,12,0.7)'; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 40px system-ui'; ctx.textAlign='center';
+      ctx.fillText('PAUSED', W/2, H/2);
+      ctx.font = '16px system-ui'; ctx.fillStyle = '#8fa3c8';
+      ctx.fillText('P or Esc to resume · R back to plan', W/2, H/2+34);
+    }
+  }
   ctx.restore();
 }
-buildLayout();
-resetRun();
-renderFloor();
+
+/* ---------------- main loop ---------------- */
+let lastT = performance.now();
+function frame(now){
+  let dt = (now - lastT) / 1000;
+  lastT = now;
+  dt = clamp(dt, 0, 0.05);
+  update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
 requestAnimationFrame(frame);
 </script>
 </body>
